@@ -73,8 +73,34 @@
   for (let i = 0; i < MONSTER_COUNT; i++) spawnMonster();
   let respawnQueue = [];
 
+  // ===== 아이템 (몬스터가 죽으면 떨어짐, 먹으면 공격력이 2배씩 = 기하급수) =====
+  const items = [];
+  const floats = [];
+  const power = { level: 0, dmg: 1, flash: 0 };
+  const UNITS = ['', '만', '억', '조', '경', '해', '자', '양', '구', '간', '정', '재', '극'];
+  function fmtPower(n) {
+    if (!isFinite(n)) return '∞';
+    if (n < 10000) return String(n);
+    const u = Math.floor(Math.log10(n) / 4);
+    if (u >= UNITS.length) return '2^' + power.level;
+    const v = n / Math.pow(10000, u);
+    return (v >= 100 ? Math.floor(v) : Math.floor(v * 10) / 10) + UNITS[u];
+  }
+  function eatItem() {
+    power.level++;
+    power.dmg = Math.pow(2, power.level);
+    power.flash = 1;
+    floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '공격력 ×2 → ' + fmtPower(power.dmg) });
+  }
+
   // ===== 카메라 =====
   const cam = { x: 0, y: 0 };
+
+  // 노치가 있는 폰에서 위쪽 표시가 가려지지 않게 안전 영역 확인
+  const safeProbe = document.createElement('div');
+  safeProbe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top);';
+  document.body.appendChild(safeProbe);
+  let safeTop = 0;
 
   // ===== 화면 크기 =====
   let W = 0, H = 0, DPR = 1;
@@ -85,6 +111,7 @@
     canvas.width = Math.floor(W * DPR);
     canvas.height = Math.floor(H * DPR);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    safeTop = parseFloat(getComputedStyle(safeProbe).paddingTop) || 0;
   }
   window.addEventListener('resize', resize);
   resize();
@@ -249,11 +276,12 @@
         for (let j = monsters.length - 1; j >= 0; j--) {
           const m = monsters[j];
           if (Math.hypot(b.x - m.x, b.y - m.y) < m.r + 4) {
-            m.hp--; m.hit = 0.12;
+            m.hp -= power.dmg; m.hit = 0.12;
             m.x += b.vx / gun.bulletSpeed * 6; m.y += b.vy / gun.bulletSpeed * 6;
             dead = true;
             if (m.hp <= 0) {
               poofs.push({ x: m.x, y: m.y, t: 0 });
+              items.push({ x: m.x, y: m.y, r: 11, t: 0 });
               monsters.splice(j, 1);
               respawnQueue.push(3);
             }
@@ -284,6 +312,21 @@
     for (let i = respawnQueue.length - 1; i >= 0; i--) {
       respawnQueue[i] -= dt;
       if (respawnQueue[i] <= 0) { respawnQueue.splice(i, 1); spawnMonster(); }
+    }
+
+    // 아이템 먹기 (닿으면 먹음)
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      it.t += dt;
+      if (Math.hypot(it.x - player.x, it.y - player.y) < player.r + it.r) {
+        items.splice(i, 1);
+        eatItem();
+      }
+    }
+    power.flash = Math.max(0, power.flash - dt * 2);
+    for (let i = floats.length - 1; i >= 0; i--) {
+      floats[i].t += dt;
+      if (floats[i].t > 1.1) floats.splice(i, 1);
     }
 
     // 쓰러짐 효과
@@ -448,9 +491,69 @@
     }
   }
 
+  function drawItems() {
+    for (const it of items) {
+      const sx = it.x - cam.x, sy = it.y - cam.y;
+      if (sx < -40 || sy < -40 || sx > W + 40 || sy > H + 40) continue;
+      const pop = Math.min(1, it.t / 0.2);
+      const bob = Math.sin(it.t * 4) * 3;
+      const r = it.r * pop;
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.beginPath();
+      ctx.ellipse(sx, sy + it.r * 0.9, r * 0.9, r * 0.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // 빛무리
+      ctx.fillStyle = `rgba(255,120,70,${0.22 + 0.1 * Math.sin(it.t * 6)})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy - 4 + bob, r * 1.9, 0, Math.PI * 2);
+      ctx.fill();
+      // 알맹이
+      ctx.fillStyle = '#ff5a3c';
+      ctx.strokeStyle = '#8a1f10';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx, sy - 4 + bob, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.beginPath();
+      ctx.arc(sx - r * 0.35, sy - 4 + bob - r * 0.35, r * 0.28, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawFloats() {
+    ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const f of floats) {
+      const k = f.t / 1.1;
+      const sx = f.x - cam.x, sy = f.y - cam.y - k * 40;
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = `rgba(0,0,0,${0.7 * (1 - k)})`;
+      ctx.fillStyle = `rgba(255,214,90,${1 - k})`;
+      ctx.strokeText(f.text, sx, sy);
+      ctx.fillText(f.text, sx, sy);
+    }
+  }
+
+  function drawHud() {
+    const text = '공격력 ' + fmtPower(power.dmg);
+    const size = 17 + power.flash * 6;
+    ctx.font = `bold ${size}px system-ui, -apple-system, sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(text).width;
+    const x = 12, y = safeTop + 12, h = 34;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(x, y, tw + 24, h);
+    ctx.fillStyle = power.flash > 0 ? '#ffd65a' : '#ffffff';
+    ctx.fillText(text, x + 12, y + h / 2 + 1);
+  }
+
   function drawBullets() {
     ctx.strokeStyle = '#ffe27a';
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 4 + Math.min(power.level, 8);
     ctx.lineCap = 'round';
     ctx.beginPath();
     for (const b of bullets) {
@@ -506,11 +609,14 @@
 
   function render() {
     drawWorld();
+    drawItems();
     drawMonsters();
     drawBullets();
     drawPlayer();
+    drawFloats();
     drawStick();
     drawFireBtn();
+    drawHud();
   }
 
   // ===== 루프 =====
