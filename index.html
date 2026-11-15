@@ -57,6 +57,28 @@
   const gun = { cooldown: 0, rate: 0.18, bulletSpeed: 720, bulletLife: 0.75, recoil: 0 };
   const bullets = [];
 
+  // ===== 무기 업그레이드 (아이템을 먹을 때 일정 확률로 다음 단계 무기로) =====
+  const WEAPON_UPGRADE_CHANCE = 0.2;
+  const WEAPONS = [
+    { name: '권총',             rate: 0.18, shots: 1, spread: 0,    speed: 720, color: '255,226,122', body: '#3a3d44', len: 20, accent: null,      glow: false },
+    { name: '기관총',           rate: 0.11, shots: 1, spread: 0,    speed: 780, color: '255,170,70',  body: '#2f3b2f', len: 27, accent: '#d4a72c', glow: false },
+    { name: '삼연발 샷건',      rate: 0.15, shots: 3, spread: 0.16, speed: 760, color: '120,232,255', body: '#24476b', len: 25, accent: '#7ee8ff', glow: true  },
+    { name: '레이저건',         rate: 0.09, shots: 3, spread: 0.11, speed: 920, color: '255,107,240', body: '#45285a', len: 29, accent: '#ff6bf0', glow: true  },
+    { name: '황금 플라즈마 캐논', rate: 0.08, shots: 5, spread: 0.13, speed: 980, color: '255,240,160', body: '#b8860b', len: 33, accent: '#fff2a8', glow: true  }
+  ];
+  const weapon = { tier: 0, fx: 0 };
+  function curWeapon() { return WEAPONS[weapon.tier]; }
+  function tryUpgradeWeapon() {
+    if (weapon.tier >= WEAPONS.length - 1) return;
+    if (Math.random() >= WEAPON_UPGRADE_CHANCE) return;
+    weapon.tier++;
+    weapon.fx = 1;
+    const w = curWeapon();
+    gun.rate = w.rate;
+    gun.bulletSpeed = w.speed;
+    floats.push({ x: player.x, y: player.y - player.r - 36, t: 0, text: '무기 업그레이드! → ' + w.name, color: w.color });
+  }
+
   // ===== 몬스터 =====
   const MONSTER_COUNT = 14;
   const monsters = [];
@@ -130,6 +152,7 @@
     power.dmg = Math.pow(2, power.level);
     power.flash = 1;
     floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '공격력 ×2 → ' + fmtPower(power.dmg) });
+    tryUpgradeWeapon();
   }
 
   // ===== 카메라 =====
@@ -303,14 +326,21 @@
     if ((keys.fire || fireBtn.pressed) && gun.cooldown <= 0) {
       gun.cooldown = gun.rate;
       gun.recoil = 1;
+      const w = curWeapon();
       const mx = player.x + player.dirX * (player.r + 14);
       const my = player.y + player.dirY * (player.r + 14);
-      bullets.push({
-        x: mx, y: my,
-        vx: player.dirX * gun.bulletSpeed, vy: player.dirY * gun.bulletSpeed,
-        life: gun.bulletLife
-      });
+      const base = Math.atan2(player.dirY, player.dirX);
+      for (let s = 0; s < w.shots; s++) {
+        const a = base + (s - (w.shots - 1) / 2) * w.spread;
+        bullets.push({
+          x: mx, y: my,
+          vx: Math.cos(a) * gun.bulletSpeed, vy: Math.sin(a) * gun.bulletSpeed,
+          spd: gun.bulletSpeed, color: w.color, glow: w.glow,
+          life: gun.bulletLife
+        });
+      }
     }
+    weapon.fx = Math.max(0, weapon.fx - dt * 1.2);
 
     // 총알 이동 + 몬스터 명중
     for (let i = bullets.length - 1; i >= 0; i--) {
@@ -322,7 +352,7 @@
           const m = monsters[j];
           if (Math.hypot(b.x - m.x, b.y - m.y) < m.r + 4) {
             m.hp -= power.dmg; m.hit = 0.12;
-            m.x += b.vx / gun.bulletSpeed * 6; m.y += b.vy / gun.bulletSpeed * 6;
+            m.x += b.vx / b.spd * 6; m.y += b.vy / b.spd * 6;
             dead = true;
             if (m.hp <= 0) {
               poofs.push({ x: m.x, y: m.y, t: 0 });
@@ -488,19 +518,59 @@
       ctx.save();
       ctx.translate(gx, gy);
       ctx.rotate(Math.atan2(player.dirY, player.dirX));
-      ctx.fillStyle = '#3a3d44';
+      const w = curWeapon();
+      const L = w.len;
+      // 빛나는 무기는 주변에 은은한 빛
+      if (w.glow) {
+        ctx.fillStyle = `rgba(${w.color},${0.18 + 0.08 * Math.sin(performance.now() / 150)})`;
+        ctx.beginPath();
+        ctx.ellipse(L / 2 - 2, 0, L / 2 + 8, 10, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = w.body;
       ctx.strokeStyle = '#15171b';
       ctx.lineWidth = 1.5;
-      ctx.fillRect(-4, -3.5, 20, 7);
-      ctx.strokeRect(-4, -3.5, 20, 7);
+      ctx.fillRect(-4, -3.5, L, 7);
+      ctx.strokeRect(-4, -3.5, L, 7);
       ctx.fillRect(-2, 2, 5, 6);
-      if (gun.recoil > 0.7) {
-        ctx.fillStyle = '#ffd34d';
+      ctx.strokeRect(-2, 2, 5, 6);
+      if (w.accent) {
+        // 무기 띠 장식
+        ctx.fillStyle = w.accent;
+        ctx.fillRect(2, -1.2, L - 10, 2.4);
+        // 총구 끝 장식
+        ctx.fillRect(L - 7, -4.5, 3, 9);
+      }
+      if (weapon.tier >= 2) {
+        // 위쪽 보조 총열
+        ctx.fillStyle = w.body;
+        ctx.fillRect(0, -7, L - 8, 3.5);
+        ctx.strokeRect(0, -7, L - 8, 3.5);
+      }
+      if (weapon.tier >= 4) {
+        // 캐논 에너지 코어
+        ctx.fillStyle = `rgba(${w.color},${0.7 + 0.3 * Math.sin(performance.now() / 90)})`;
         ctx.beginPath();
-        ctx.arc(19, 0, 5, 0, Math.PI * 2);
+        ctx.arc(4, 0, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (gun.recoil > 0.7) {
+        ctx.fillStyle = `rgb(${w.color})`;
+        ctx.beginPath();
+        ctx.arc(L - 1, 0, 5 + weapon.tier, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.restore();
+    }
+
+    // 무기 업그레이드 순간 빛나는 고리
+    if (weapon.fx > 0) {
+      const k = 1 - weapon.fx;
+      ctx.strokeStyle = `rgba(${curWeapon().color},${weapon.fx})`;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(sx, by, player.r + 6 + k * 40, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     // 눈 (바라보는 방향)
@@ -670,19 +740,43 @@
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffffff';
     ctx.fillText('체력 ' + player.hp + ' / ' + player.maxHp, x + 12 + bw / 2, hy + 5 + bh / 2 + 1);
+
+    // 무기
+    const wy = hy + bh + 10 + 6;
+    const w = curWeapon();
+    const wtext = '무기 ' + w.name + (weapon.tier >= WEAPONS.length - 1 ? ' (최강)' : '');
+    ctx.font = `bold ${14 + weapon.fx * 4}px system-ui, -apple-system, sans-serif`;
+    ctx.textAlign = 'left';
+    const ww = ctx.measureText(wtext).width;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(x, wy, ww + 24, 26);
+    ctx.fillStyle = `rgb(${w.color})`;
+    ctx.fillText(wtext, x + 12, wy + 14);
   }
 
   function drawBullets() {
-    ctx.strokeStyle = '#ffe27a';
-    ctx.lineWidth = 4 + Math.min(power.level, 8);
+    const lw = 4 + Math.min(power.level, 8);
     ctx.lineCap = 'round';
-    ctx.beginPath();
     for (const b of bullets) {
       const sx = b.x - cam.x, sy = b.y - cam.y;
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(sx - b.vx * 0.015, sy - b.vy * 0.015);
+      const tx = sx - b.vx * 0.015, ty = sy - b.vy * 0.015;
+      if (b.glow) {
+        // 빛나는 총알: 바깥 빛 + 하얀 심지
+        ctx.strokeStyle = `rgba(${b.color},0.35)`;
+        ctx.lineWidth = lw + 8;
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(tx, ty); ctx.stroke();
+        ctx.strokeStyle = `rgb(${b.color})`;
+        ctx.lineWidth = lw;
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(tx, ty); ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.lineWidth = Math.max(1.5, lw * 0.35);
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(tx, ty); ctx.stroke();
+      } else {
+        ctx.strokeStyle = `rgb(${b.color})`;
+        ctx.lineWidth = lw;
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(tx, ty); ctx.stroke();
+      }
     }
-    ctx.stroke();
     ctx.lineCap = 'butt';
   }
 
