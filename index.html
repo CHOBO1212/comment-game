@@ -45,7 +45,12 @@
     dirX: 0,
     dirY: 1,         // 바라보는 방향
     moving: false,
-    walkTime: 0
+    walkTime: 0,
+    hp: 10,
+    maxHp: 10,
+    invuln: 0,       // 맞은 직후 잠깐 무적
+    hurt: 0,         // 맞았을 때 붉게 깜빡임
+    kbx: 0, kby: 0   // 맞았을 때 밀려남
   };
 
   // ===== 총 =====
@@ -67,8 +72,42 @@
     monsters.push({
       x, y, r: 18, hp: 3, maxHp: 3, speed: 50 + Math.random() * 30,
       vx: Math.cos(a), vy: Math.sin(a), turn: 1 + Math.random() * 2,
-      hit: 0, t: Math.random() * 10
+      hit: 0, t: Math.random() * 10,
+      state: 'wander', st: 0, atkCd: Math.random(), ax: 0, ay: 1, dealt: false
     });
+  }
+
+  // ===== 몬스터 공격 / 히트박스 =====
+  // 가까이 오면 멈춰서 빨간 히트박스를 예고(windup) → 휘두름(attack) → 쉬기
+  const ATK = {
+    range: 95,        // 이 거리 안에 들어오면 공격 시작
+    windup: 0.55,     // 예고 시간
+    active: 0.15,     // 히트박스가 실제로 판정하는 시간
+    cooldown: 1.2,    // 다음 공격까지
+    reach: 26,        // 몬스터 몸 끝에서 히트박스 중심까지
+    hbR: 24,          // 히트박스 반지름
+    dmg: 1
+  };
+  function hitboxOf(m) {
+    return { x: m.x + m.ax * (m.r + ATK.reach), y: m.y + m.ay * (m.r + ATK.reach), r: ATK.hbR };
+  }
+  const SPAWN = { x: WORLD.w / 2, y: WORLD.h / 2 };
+  function hurtPlayer(dmg, fromX, fromY) {
+    if (player.invuln > 0) return;
+    player.hp = Math.max(0, player.hp - dmg);
+    player.invuln = 0.7;
+    player.hurt = 0.3;
+    const dx = player.x - fromX, dy = player.y - fromY, d = Math.hypot(dx, dy) || 1;
+    player.kbx = dx / d * 420; player.kby = dy / d * 420;
+    floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '-' + dmg, color: '255,90,80' });
+    if (player.hp <= 0) {
+      poofs.push({ x: player.x, y: player.y, t: 0 });
+      floats.push({ x: SPAWN.x, y: SPAWN.y - player.r - 30, t: 0, text: '쓰러졌다! 다시 시작', color: '255,90,80' });
+      player.x = SPAWN.x; player.y = SPAWN.y;
+      player.hp = player.maxHp;
+      player.kbx = player.kby = 0;
+      player.invuln = 1.5;
+    }
   }
   for (let i = 0; i < MONSTER_COUNT; i++) spawnMonster();
   let respawnQueue = [];
@@ -248,6 +287,12 @@
       player.walkTime = 0;
     }
 
+    // 맞았을 때 밀려남 / 무적 시간
+    player.x += player.kbx * dt; player.y += player.kby * dt;
+    const kd = Math.exp(-dt * 12); player.kbx *= kd; player.kby *= kd;
+    player.invuln = Math.max(0, player.invuln - dt);
+    player.hurt = Math.max(0, player.hurt - dt);
+
     // 세계 경계
     player.x = Math.max(player.r, Math.min(WORLD.w - player.r, player.x));
     player.y = Math.max(player.r, Math.min(WORLD.h - player.r, player.y));
@@ -296,14 +341,39 @@
     for (const m of monsters) {
       m.t += dt;
       m.hit = Math.max(0, m.hit - dt);
-      m.turn -= dt;
-      if (m.turn <= 0) {
-        const a = Math.random() * Math.PI * 2;
-        m.vx = Math.cos(a); m.vy = Math.sin(a);
-        m.turn = 1 + Math.random() * 2.5;
+      m.atkCd = Math.max(0, m.atkCd - dt);
+      const pdx = player.x - m.x, pdy = player.y - m.y;
+      const pd = Math.hypot(pdx, pdy);
+      if (m.state === 'wander' && m.atkCd <= 0 && pd - player.r - m.r < ATK.range) {
+        m.state = 'windup'; m.st = 0; m.dealt = false;
+        m.ax = pdx / (pd || 1); m.ay = pdy / (pd || 1);
       }
-      m.x += m.vx * m.speed * dt;
-      m.y += m.vy * m.speed * dt;
+      if (m.state === 'windup') {
+        m.st += dt;
+        // 예고 중에는 플레이어 쪽으로 천천히 조준
+        const tx = pdx / (pd || 1), ty = pdy / (pd || 1);
+        m.ax += (tx - m.ax) * Math.min(1, dt * 4); m.ay += (ty - m.ay) * Math.min(1, dt * 4);
+        const al = Math.hypot(m.ax, m.ay) || 1; m.ax /= al; m.ay /= al;
+        m.vx = m.ax; m.vy = m.ay;
+        if (m.st >= ATK.windup) { m.state = 'attack'; m.st = 0; }
+      } else if (m.state === 'attack') {
+        m.st += dt;
+        const hb = hitboxOf(m);
+        if (!m.dealt && Math.hypot(player.x - hb.x, player.y - hb.y) < hb.r + player.r) {
+          m.dealt = true;
+          hurtPlayer(ATK.dmg, m.x, m.y);
+        }
+        if (m.st >= ATK.active) { m.state = 'wander'; m.atkCd = ATK.cooldown; m.turn = 0.5 + Math.random(); }
+      } else {
+        m.turn -= dt;
+        if (m.turn <= 0) {
+          const a = Math.random() * Math.PI * 2;
+          m.vx = Math.cos(a); m.vy = Math.sin(a);
+          m.turn = 1 + Math.random() * 2.5;
+        }
+        m.x += m.vx * m.speed * dt;
+        m.y += m.vy * m.speed * dt;
+      }
       if (m.x < m.r || m.x > WORLD.w - m.r) { m.vx *= -1; m.x = Math.max(m.r, Math.min(WORLD.w - m.r, m.x)); }
       if (m.y < m.r || m.y > WORLD.h - m.r) { m.vy *= -1; m.y = Math.max(m.r, Math.min(WORLD.h - m.r, m.y)); }
     }
@@ -377,6 +447,7 @@
   }
 
   function drawPlayer() {
+    if (player.invuln > 0 && Math.floor(player.invuln * 14) % 2 === 1) ctx.globalAlpha = 0.45;
     const sx = player.x - cam.x;
     const sy = player.y - cam.y;
     const bob = player.moving ? Math.abs(Math.sin(player.walkTime)) * 3 : 0;
@@ -401,7 +472,7 @@
 
     // 몸
     const by = sy - bob;
-    ctx.fillStyle = '#f2c14e';
+    ctx.fillStyle = player.hurt > 0 ? '#ff6a5a' : '#f2c14e';
     ctx.strokeStyle = '#7a5a12';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -441,28 +512,65 @@
       ctx.arc(ex + px * side * 5, ey + py * side * 5, 2.6, 0, Math.PI * 2);
       ctx.fill();
     }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawHitboxes() {
+    for (const m of monsters) {
+      if (m.state !== 'windup' && m.state !== 'attack') continue;
+      const hb = hitboxOf(m);
+      const sx = hb.x - cam.x, sy = hb.y - cam.y;
+      if (sx < -60 || sy < -60 || sx > W + 60 || sy > H + 60) continue;
+      ctx.save();
+      if (m.state === 'windup') {
+        const k = m.st / ATK.windup;
+        // 예고: 점선 테두리 + 안쪽이 점점 차오름
+        ctx.fillStyle = 'rgba(255,60,50,0.12)';
+        ctx.beginPath(); ctx.arc(sx, sy, hb.r, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(255,60,50,0.35)';
+        ctx.beginPath(); ctx.arc(sx, sy, hb.r * k, 0, Math.PI * 2); ctx.fill();
+        ctx.setLineDash([5, 4]);
+        ctx.strokeStyle = 'rgba(255,80,70,0.9)';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy, hb.r, 0, Math.PI * 2); ctx.stroke();
+      } else {
+        // 판정 중: 진한 빨강
+        ctx.fillStyle = 'rgba(255,40,30,0.6)';
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(sx, sy, hb.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
 
   function drawMonsters() {
     for (const m of monsters) {
       const sx = m.x - cam.x, sy = m.y - cam.y;
       if (sx < -40 || sy < -40 || sx > W + 40 || sy > H + 40) continue;
-      const wob = Math.sin(m.t * 6) * 1.5;
+      let wob = Math.sin(m.t * 6) * 1.5;
+      let sx0 = sx, sy0 = sy;
+      if (m.state === 'windup') {
+        sx0 += (Math.random() - 0.5) * 3; sy0 += (Math.random() - 0.5) * 3;
+        sx0 -= m.ax * 4 * (m.st / ATK.windup); sy0 -= m.ay * 4 * (m.st / ATK.windup);
+      } else if (m.state === 'attack') {
+        sx0 += m.ax * 10; sy0 += m.ay * 10;
+      }
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
       ctx.beginPath();
       ctx.ellipse(sx, sy + m.r * 0.7, m.r, m.r * 0.45, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = m.hit > 0 ? '#ffffff' : '#8e44ad';
+      ctx.fillStyle = m.hit > 0 ? '#ffffff' : (m.state === 'windup' || m.state === 'attack') ? '#b0388f' : '#8e44ad';
       ctx.strokeStyle = '#4a1f5c';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.ellipse(sx, sy - wob, m.r + wob * 0.5, m.r - wob * 0.5, 0, 0, Math.PI * 2);
+      ctx.ellipse(sx0, sy0 - wob, m.r + wob * 0.5, m.r - wob * 0.5, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
 
       // 눈
-      const ex = sx + m.vx * 6, ey = sy - wob + m.vy * 6 - 3;
+      const ex = sx0 + m.vx * 6, ey = sy0 - wob + m.vy * 6 - 3;
       ctx.fillStyle = '#fff';
       for (const side of [-1, 1]) {
         ctx.beginPath(); ctx.arc(ex + side * 6, ey, 4, 0, Math.PI * 2); ctx.fill();
@@ -531,7 +639,7 @@
       const sx = f.x - cam.x, sy = f.y - cam.y - k * 40;
       ctx.lineWidth = 4;
       ctx.strokeStyle = `rgba(0,0,0,${0.7 * (1 - k)})`;
-      ctx.fillStyle = `rgba(255,214,90,${1 - k})`;
+      ctx.fillStyle = `rgba(${f.color || '255,214,90'},${1 - k})`;
       ctx.strokeText(f.text, sx, sy);
       ctx.fillText(f.text, sx, sy);
     }
@@ -549,6 +657,19 @@
     ctx.fillRect(x, y, tw + 24, h);
     ctx.fillStyle = power.flash > 0 ? '#ffd65a' : '#ffffff';
     ctx.fillText(text, x + 12, y + h / 2 + 1);
+
+    // 체력
+    const hy = y + h + 6, bw = 150, bh = 16;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(x, hy, bw + 24, bh + 10);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(x + 12, hy + 5, bw, bh);
+    ctx.fillStyle = player.hurt > 0 ? '#ffffff' : '#e74c3c';
+    ctx.fillRect(x + 12, hy + 5, bw * (player.hp / player.maxHp), bh);
+    ctx.font = 'bold 12px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('체력 ' + player.hp + ' / ' + player.maxHp, x + 12 + bw / 2, hy + 5 + bh / 2 + 1);
   }
 
   function drawBullets() {
@@ -610,6 +731,7 @@
   function render() {
     drawWorld();
     drawItems();
+    drawHitboxes();
     drawMonsters();
     drawBullets();
     drawPlayer();
