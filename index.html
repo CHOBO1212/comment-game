@@ -111,7 +111,8 @@
     dmg: 1
   };
   function hitboxOf(m) {
-    return { x: m.x + m.ax * (m.r + ATK.reach), y: m.y + m.ay * (m.r + ATK.reach), r: ATK.hbR };
+    const reach = m.reach || ATK.reach;
+    return { x: m.x + m.ax * (m.r + reach), y: m.y + m.ay * (m.r + reach), r: m.hbR || ATK.hbR };
   }
   const SPAWN = { x: WORLD.w / 2, y: WORLD.h / 2 };
   function hurtPlayer(dmg, fromX, fromY) {
@@ -133,6 +134,40 @@
   }
   for (let i = 0; i < MONSTER_COUNT; i++) spawnMonster();
   let respawnQueue = [];
+
+  // ===== 중간 보스 (일정 시간마다 작은 몹을 불러냄) =====
+  const BOSS = {
+    x: WORLD.w / 2, y: WORLD.h / 2 - 700,   // 시작 지점 북쪽
+    r: 40, hp: 60, speed: 32,
+    summonEvery: 5,   // 초마다 소환
+    summonCount: 2,   // 한 번에 소환하는 수
+    maxMinions: 8,    // 보스 한 마리당 살아 있을 수 있는 작은 몹 수
+    respawn: 20       // 쓰러진 뒤 다시 나타나기까지
+  };
+  let bossRespawn = 0;
+  function spawnBoss() {
+    monsters.push({
+      boss: true, x: BOSS.x, y: BOSS.y, r: BOSS.r, hp: BOSS.hp, maxHp: BOSS.hp, speed: BOSS.speed,
+      vx: 0, vy: 1, turn: 2, hit: 0, t: 0,
+      state: 'wander', st: 0, atkCd: 1, ax: 0, ay: 1, dealt: false,
+      reach: 34, hbR: 38, dmg: 2,
+      summonT: BOSS.summonEvery, summonFx: 0
+    });
+  }
+  function spawnMinion(boss) {
+    const a = Math.random() * Math.PI * 2;
+    const d = boss.r + 22;
+    monsters.push({
+      minion: true, x: boss.x + Math.cos(a) * d, y: boss.y + Math.sin(a) * d,
+      r: 11, hp: 1, maxHp: 1, speed: 85 + Math.random() * 30,
+      vx: Math.cos(a), vy: Math.sin(a), turn: 0.5 + Math.random(),
+      hit: 0, t: Math.random() * 10,
+      state: 'wander', st: 0, atkCd: 0.8 + Math.random(), ax: 0, ay: 1, dealt: false,
+      reach: 16, hbR: 16
+    });
+    poofs.push({ x: boss.x + Math.cos(a) * d, y: boss.y + Math.sin(a) * d, t: 0 });
+  }
+  spawnBoss();
 
   // ===== 아이템 (몬스터가 죽으면 떨어짐, 먹으면 공격력이 2배씩 = 기하급수) =====
   const items = [];
@@ -358,7 +393,10 @@
               poofs.push({ x: m.x, y: m.y, t: 0 });
               items.push({ x: m.x, y: m.y, r: 11, t: 0 });
               monsters.splice(j, 1);
-              respawnQueue.push(3);
+              if (m.boss) {
+                bossRespawn = BOSS.respawn;
+                floats.push({ x: m.x, y: m.y - m.r - 20, t: 0, text: '중간 보스 처치!', color: '255,120,90' });
+              } else if (!m.minion) respawnQueue.push(3);
             }
             break;
           }
@@ -368,6 +406,27 @@
     }
 
     // 몬스터 돌아다니기
+    // 중간 보스: 일정 시간마다 작은 몹 소환
+    for (const m of monsters.slice()) {
+      if (!m.boss) continue;
+      m.summonFx = Math.max(0, m.summonFx - dt * 1.5);
+      m.summonT -= dt;
+      if (m.summonT <= 0) {
+        m.summonT = BOSS.summonEvery;
+        const alive = monsters.filter(o => o.minion).length;
+        const n = Math.min(BOSS.summonCount, BOSS.maxMinions - alive);
+        if (n > 0) {
+          for (let i = 0; i < n; i++) spawnMinion(m);
+          m.summonFx = 1;
+          floats.push({ x: m.x, y: m.y - m.r - 20, t: 0, text: '소환!', color: '255,120,90' });
+        }
+      }
+    }
+    if (bossRespawn > 0) {
+      bossRespawn -= dt;
+      if (bossRespawn <= 0) spawnBoss();
+    }
+
     for (const m of monsters) {
       m.t += dt;
       m.hit = Math.max(0, m.hit - dt);
@@ -391,7 +450,7 @@
         const hb = hitboxOf(m);
         if (!m.dealt && Math.hypot(player.x - hb.x, player.y - hb.y) < hb.r + player.r) {
           m.dealt = true;
-          hurtPlayer(ATK.dmg, m.x, m.y);
+          hurtPlayer(m.dmg || ATK.dmg, m.x, m.y);
         }
         if (m.st >= ATK.active) { m.state = 'wander'; m.atkCd = ATK.cooldown; m.turn = 0.5 + Math.random(); }
       } else {
@@ -590,7 +649,7 @@
       if (m.state !== 'windup' && m.state !== 'attack') continue;
       const hb = hitboxOf(m);
       const sx = hb.x - cam.x, sy = hb.y - cam.y;
-      if (sx < -60 || sy < -60 || sx > W + 60 || sy > H + 60) continue;
+      if (sx < -80 || sy < -80 || sx > W + 80 || sy > H + 80) continue;
       ctx.save();
       if (m.state === 'windup') {
         const k = m.st / ATK.windup;
@@ -617,8 +676,10 @@
   function drawMonsters() {
     for (const m of monsters) {
       const sx = m.x - cam.x, sy = m.y - cam.y;
-      if (sx < -40 || sy < -40 || sx > W + 40 || sy > H + 40) continue;
-      let wob = Math.sin(m.t * 6) * 1.5;
+      const cull = m.r + 60;
+      if (sx < -cull || sy < -cull || sx > W + cull || sy > H + cull) continue;
+      const sc = m.r / 18;
+      let wob = Math.sin(m.t * 6) * 1.5 * sc;
       let sx0 = sx, sy0 = sy;
       if (m.state === 'windup') {
         sx0 += (Math.random() - 0.5) * 3; sy0 += (Math.random() - 0.5) * 3;
@@ -631,27 +692,71 @@
       ctx.ellipse(sx, sy + m.r * 0.7, m.r, m.r * 0.45, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.fillStyle = m.hit > 0 ? '#ffffff' : (m.state === 'windup' || m.state === 'attack') ? '#b0388f' : '#8e44ad';
-      ctx.strokeStyle = '#4a1f5c';
-      ctx.lineWidth = 2;
+      const angry = m.state === 'windup' || m.state === 'attack';
+      if (m.boss) {
+        // 소환할 때 퍼지는 고리
+        if (m.summonFx > 0) {
+          ctx.strokeStyle = `rgba(255,90,60,${m.summonFx})`;
+          ctx.lineWidth = 4;
+          ctx.beginPath(); ctx.arc(sx, sy, m.r + 8 + (1 - m.summonFx) * 50, 0, Math.PI * 2); ctx.stroke();
+        }
+        ctx.fillStyle = m.hit > 0 ? '#ffffff' : angry ? '#d63a2a' : '#a8281c';
+        ctx.strokeStyle = '#4a0f0a';
+        ctx.lineWidth = 3;
+      } else if (m.minion) {
+        ctx.fillStyle = m.hit > 0 ? '#ffffff' : angry ? '#ff8a5c' : '#e8673c';
+        ctx.strokeStyle = '#6a2410';
+        ctx.lineWidth = 2;
+      } else {
+        ctx.fillStyle = m.hit > 0 ? '#ffffff' : angry ? '#b0388f' : '#8e44ad';
+        ctx.strokeStyle = '#4a1f5c';
+        ctx.lineWidth = 2;
+      }
       ctx.beginPath();
       ctx.ellipse(sx0, sy0 - wob, m.r + wob * 0.5, m.r - wob * 0.5, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
 
-      // 눈
-      const ex = sx0 + m.vx * 6, ey = sy0 - wob + m.vy * 6 - 3;
-      ctx.fillStyle = '#fff';
-      for (const side of [-1, 1]) {
-        ctx.beginPath(); ctx.arc(ex + side * 6, ey, 4, 0, Math.PI * 2); ctx.fill();
-      }
-      ctx.fillStyle = '#c0392b';
-      for (const side of [-1, 1]) {
-        ctx.beginPath(); ctx.arc(ex + side * 6 + m.vx * 1.5, ey + m.vy * 1.5, 2, 0, Math.PI * 2); ctx.fill();
+      // 보스 뿔
+      if (m.boss) {
+        ctx.fillStyle = '#f3e6c4';
+        ctx.strokeStyle = '#4a0f0a';
+        ctx.lineWidth = 2;
+        const top = sy0 - wob - m.r + 6;
+        for (const side of [-1, 1]) {
+          ctx.beginPath();
+          ctx.moveTo(sx0 + side * 14, top + 4);
+          ctx.lineTo(sx0 + side * 30, top - 22);
+          ctx.lineTo(sx0 + side * 26, top + 8);
+          ctx.closePath(); ctx.fill(); ctx.stroke();
+        }
       }
 
-      // 체력바
-      if (m.hp < m.maxHp) {
+      // 눈
+      const ex = sx0 + m.vx * 6 * sc, ey = sy0 - wob + (m.vy * 6 - 3) * sc;
+      ctx.fillStyle = m.boss ? '#ffe36a' : '#fff';
+      for (const side of [-1, 1]) {
+        ctx.beginPath(); ctx.arc(ex + side * 6 * sc, ey, 4 * sc, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.fillStyle = m.boss ? '#2a0000' : '#c0392b';
+      for (const side of [-1, 1]) {
+        ctx.beginPath(); ctx.arc(ex + side * 6 * sc + m.vx * 1.5 * sc, ey + m.vy * 1.5 * sc, 2 * sc, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // 체력바 (보스는 항상 표시 + 이름)
+      if (m.boss) {
+        const bw = 90, by0 = sy - m.r - 42;
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(sx - bw / 2, by0, bw, 8);
+        ctx.fillStyle = '#ff4a3a';
+        ctx.fillRect(sx - bw / 2, by0, bw * Math.max(0, m.hp / m.maxHp), 8);
+        ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+        ctx.strokeText('중간 보스', sx, by0 - 10);
+        ctx.fillStyle = '#ffb09a';
+        ctx.fillText('중간 보스', sx, by0 - 10);
+      } else if (m.hp < m.maxHp) {
         const bw = 30;
         ctx.fillStyle = 'rgba(0,0,0,0.5)';
         ctx.fillRect(sx - bw / 2, sy - m.r - 14, bw, 5);
