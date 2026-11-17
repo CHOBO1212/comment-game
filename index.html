@@ -80,7 +80,7 @@
   }
 
   // ===== 몬스터 =====
-  const MONSTER_COUNT = 14;
+  const MONSTER_COUNT = 30;
   const monsters = [];
   const poofs = [];
   function spawnMonster() {
@@ -137,12 +137,20 @@
 
   // ===== 중간 보스 (일정 시간마다 작은 몹을 불러냄) =====
   const BOSS = {
-    x: WORLD.w / 2, y: WORLD.h / 2 - 700,   // 시작 지점 북쪽
-    r: 40, hp: 60, speed: 32,
+    x: WORLD.w / 2, y: WORLD.h / 2 - 350,   // 시작 지점 가까이 (플레이어가 약할 때 만나도록)
+    r: 40, hp: 300, speed: 32,
     summonEvery: 5,   // 초마다 소환
     summonCount: 2,   // 한 번에 소환하는 수
     maxMinions: 8,    // 보스 한 마리당 살아 있을 수 있는 작은 몹 수
-    respawn: 20       // 쓰러진 뒤 다시 나타나기까지
+    respawn: 10,      // 쓰러진 뒤 다시 나타나기까지
+    // 패턴
+    patterns: ['fan', 'ring', 'charge', 'slam'],
+    patEvery: 2.6, patRange: 560,
+    fanShots: 5, fanSpread: 0.2, fanVolleys: 2,
+    ringShots: 12, rings: 1,
+    shotSpeed: 250, shotDmg: 1, shotR: 8, shotColor: '255,110,70',
+    chargeSpeed: 600, chargeDmg: 2,
+    slamR: 130, slamDmg: 2
   };
   let bossRespawn = 0;
   function spawnBoss() {
@@ -151,8 +159,108 @@
       vx: 0, vy: 1, turn: 2, hit: 0, t: 0,
       state: 'wander', st: 0, atkCd: 1, ax: 0, ay: 1, dealt: false,
       reach: 34, hbR: 38, dmg: 2,
-      summonT: BOSS.summonEvery, summonFx: 0
+      summonT: BOSS.summonEvery, summonFx: 0,
+      pat: null, patCd: 2, pt: 0, fired: 0, aim: 0, slamFx: 0
     });
+  }
+
+  // ===== 최종 보스 (끝판왕) — 게임 시작 5분 뒤 등장, 플레이어 힘에 맞춰 강해짐 =====
+  const FINAL = {
+    at: 300,          // 등장 시각 (초)
+    r: 54, speed: 150,
+    fightSec: 40,     // 지금 플레이어 화력으로 계속 맞혀도 이 정도 걸리는 체력
+    patterns: ['fan', 'ring', 'charge', 'slam'],
+    patEvery: 1.6, patRange: 700,
+    fanShots: 7, fanSpread: 0.16, fanVolleys: 4,
+    ringShots: 20, rings: 2,
+    shotSpeed: 330, shotDmg: 2, shotR: 10, shotColor: '200,120,255',
+    chargeSpeed: 780, chargeDmg: 3,
+    slamR: 170, slamDmg: 3
+  };
+  let gameTime = 0, finalSpawned = false;
+  const banner = { text: '', t: 0, color: '255,214,90' };
+  function finalMaxHp() {
+    const w = curWeapon();
+    return power.dmg * (w.shots / gun.rate) * FINAL.fightSec;
+  }
+  function spawnFinal() {
+    finalSpawned = true;
+    const a = Math.random() * Math.PI * 2;
+    const x = Math.max(FINAL.r, Math.min(WORLD.w - FINAL.r, player.x + Math.cos(a) * 320));
+    const y = Math.max(FINAL.r, Math.min(WORLD.h - FINAL.r, player.y + Math.sin(a) * 320));
+    const hp = finalMaxHp();
+    monsters.push({
+      final: true, x, y, r: FINAL.r, hp, maxHp: hp, speed: FINAL.speed,
+      vx: 0, vy: 1, turn: 2, hit: 0, t: 0,
+      state: 'wander', st: 0, atkCd: 1, ax: 0, ay: 1, dealt: false,
+      reach: 40, hbR: 46, dmg: 3,
+      pat: null, patCd: 1.5, pt: 0, fired: 0, aim: 0, slamFx: 0
+    });
+    poofs.push({ x, y, t: 0 });
+    banner.text = '최종 보스 등장! 끝판왕'; banner.t = 3; banner.color = '210,140,255';
+  }
+
+  // ===== 보스 원거리 탄 / 패턴 =====
+  const enemyShots = [];
+  const PAT = { fanWind: 0.5, fanGap: 0.22, ringWind: 0.7, ringGap: 0.35, chargeWind: 0.7, chargeDur: 0.5, slamWind: 0.9 };
+  function bossShoot(m, B, a) {
+    enemyShots.push({
+      x: m.x + Math.cos(a) * m.r, y: m.y + Math.sin(a) * m.r,
+      vx: Math.cos(a) * B.shotSpeed, vy: Math.sin(a) * B.shotSpeed,
+      r: B.shotR, life: 3.5, dmg: B.shotDmg, color: B.shotColor
+    });
+  }
+  // 패턴 진행 중이면 true (그동안 평소 이동/근접 공격은 쉼)
+  function updateBossPattern(m, dt, pdx, pdy, pd) {
+    const B = m.final ? FINAL : BOSS;
+    if (!m.pat) {
+      m.patCd -= dt;
+      if (m.patCd > 0 || m.state !== 'wander' || pd > B.patRange) return false;
+      m.pat = B.patterns[Math.floor(Math.random() * B.patterns.length)];
+      m.pt = 0; m.fired = 0; m.dealt = false;
+      m.aim = Math.atan2(pdy, pdx);
+    }
+    m.pt += dt;
+    const toP = Math.atan2(pdy, pdx);
+    let done = false;
+    if (m.pat === 'fan') {
+      // 부채꼴 조준 사격 (여러 번 연사)
+      m.aim = toP;
+      while (m.fired < B.fanVolleys && m.pt >= PAT.fanWind + m.fired * PAT.fanGap) {
+        for (let s = 0; s < B.fanShots; s++) bossShoot(m, B, m.aim + (s - (B.fanShots - 1) / 2) * B.fanSpread);
+        m.fired++;
+      }
+      done = m.fired >= B.fanVolleys && m.pt >= PAT.fanWind + B.fanVolleys * PAT.fanGap + 0.2;
+    } else if (m.pat === 'ring') {
+      // 사방으로 퍼지는 탄막
+      while (m.fired < B.rings && m.pt >= PAT.ringWind + m.fired * PAT.ringGap) {
+        const off = m.fired * Math.PI / B.ringShots + toP;
+        for (let i = 0; i < B.ringShots; i++) bossShoot(m, B, off + i * Math.PI * 2 / B.ringShots);
+        m.fired++;
+      }
+      done = m.fired >= B.rings && m.pt >= PAT.ringWind + B.rings * PAT.ringGap + 0.2;
+    } else if (m.pat === 'charge') {
+      // 돌진
+      if (m.pt < PAT.chargeWind) {
+        m.aim = toP; m.vx = Math.cos(toP); m.vy = Math.sin(toP);
+      } else if (m.pt < PAT.chargeWind + PAT.chargeDur) {
+        m.x += Math.cos(m.aim) * B.chargeSpeed * dt;
+        m.y += Math.sin(m.aim) * B.chargeSpeed * dt;
+        if (!m.dealt && Math.hypot(player.x - m.x, player.y - m.y) < m.r + player.r) {
+          m.dealt = true;
+          hurtPlayer(B.chargeDmg, m.x, m.y);
+        }
+      } else done = m.pt >= PAT.chargeWind + PAT.chargeDur + 0.35;
+    } else if (m.pat === 'slam') {
+      // 내려찍기 (넓은 범위)
+      if (!m.dealt && m.pt >= PAT.slamWind) {
+        m.dealt = true; m.slamFx = 1;
+        if (pd < B.slamR + player.r) hurtPlayer(B.slamDmg, m.x, m.y);
+      }
+      done = m.pt >= PAT.slamWind + 0.35;
+    }
+    if (done) { m.pat = null; m.patCd = B.patEvery * (0.7 + Math.random() * 0.6); }
+    return true;
   }
   function spawnMinion(boss) {
     const a = Math.random() * Math.PI * 2;
@@ -377,6 +485,16 @@
     }
     weapon.fx = Math.max(0, weapon.fx - dt * 1.2);
 
+    // 최종 보스: 5분 뒤 등장 + 체력을 플레이어 힘에 맞춤 (남은 비율 유지)
+    gameTime += dt;
+    if (!finalSpawned && gameTime >= FINAL.at) spawnFinal();
+    for (const m of monsters) {
+      if (!m.final) continue;
+      const nm = finalMaxHp();
+      if (nm !== m.maxHp) { m.hp = m.hp / m.maxHp * nm; m.maxHp = nm; }
+    }
+    banner.t = Math.max(0, banner.t - dt);
+
     // 총알 이동 + 몬스터 명중
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
@@ -396,6 +514,8 @@
               if (m.boss) {
                 bossRespawn = BOSS.respawn;
                 floats.push({ x: m.x, y: m.y - m.r - 20, t: 0, text: '중간 보스 처치!', color: '255,120,90' });
+              } else if (m.final) {
+                banner.text = '최종 보스 처치!'; banner.t = 3; banner.color = '255,214,90';
               } else if (!m.minion) respawnQueue.push(3);
             }
             break;
@@ -433,6 +553,14 @@
       m.atkCd = Math.max(0, m.atkCd - dt);
       const pdx = player.x - m.x, pdy = player.y - m.y;
       const pd = Math.hypot(pdx, pdy);
+      if (m.boss || m.final) {
+        m.slamFx = Math.max(0, m.slamFx - dt * 2.5);
+        if (updateBossPattern(m, dt, pdx, pdy, pd)) {
+          m.x = Math.max(m.r, Math.min(WORLD.w - m.r, m.x));
+          m.y = Math.max(m.r, Math.min(WORLD.h - m.r, m.y));
+          continue;
+        }
+      }
       if (m.state === 'wander' && m.atkCd <= 0 && pd - player.r - m.r < ATK.range) {
         m.state = 'windup'; m.st = 0; m.dealt = false;
         m.ax = pdx / (pd || 1); m.ay = pdy / (pd || 1);
@@ -453,6 +581,11 @@
           hurtPlayer(m.dmg || ATK.dmg, m.x, m.y);
         }
         if (m.st >= ATK.active) { m.state = 'wander'; m.atkCd = ATK.cooldown; m.turn = 0.5 + Math.random(); }
+      } else if (m.final) {
+        // 최종 보스는 플레이어를 쫓아옴
+        m.vx = pdx / (pd || 1); m.vy = pdy / (pd || 1);
+        m.x += m.vx * m.speed * dt;
+        m.y += m.vy * m.speed * dt;
       } else {
         m.turn -= dt;
         if (m.turn <= 0) {
@@ -465,6 +598,18 @@
       }
       if (m.x < m.r || m.x > WORLD.w - m.r) { m.vx *= -1; m.x = Math.max(m.r, Math.min(WORLD.w - m.r, m.x)); }
       if (m.y < m.r || m.y > WORLD.h - m.r) { m.vy *= -1; m.y = Math.max(m.r, Math.min(WORLD.h - m.r, m.y)); }
+    }
+
+    // 보스 원거리 탄 이동 + 플레이어 명중
+    for (let i = enemyShots.length - 1; i >= 0; i--) {
+      const s = enemyShots[i];
+      s.x += s.vx * dt; s.y += s.vy * dt; s.life -= dt;
+      let gone = s.life <= 0 || s.x < 0 || s.y < 0 || s.x > WORLD.w || s.y > WORLD.h;
+      if (!gone && Math.hypot(s.x - player.x, s.y - player.y) < s.r + player.r) {
+        hurtPlayer(s.dmg, s.x - s.vx, s.y - s.vy);
+        gone = true;
+      }
+      if (gone) enemyShots.splice(i, 1);
     }
 
     // 쓰러진 몬스터는 잠시 뒤 다른 곳에 다시 나타남
@@ -644,6 +789,74 @@
     ctx.globalAlpha = 1;
   }
 
+  function drawBossTelegraphs() {
+    for (const m of monsters) {
+      if (!m.boss && !m.final) continue;
+      const B = m.final ? FINAL : BOSS;
+      const sx = m.x - cam.x, sy = m.y - cam.y;
+      if (sx < -400 || sy < -400 || sx > W + 400 || sy > H + 400) continue;
+      ctx.save();
+      if (m.pat === 'slam' && m.pt < PAT.slamWind) {
+        const k = m.pt / PAT.slamWind;
+        ctx.fillStyle = 'rgba(255,60,50,0.12)';
+        ctx.beginPath(); ctx.arc(sx, sy, B.slamR, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(255,60,50,0.3)';
+        ctx.beginPath(); ctx.arc(sx, sy, B.slamR * k, 0, Math.PI * 2); ctx.fill();
+        ctx.setLineDash([8, 6]); ctx.strokeStyle = 'rgba(255,80,70,0.9)'; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(sx, sy, B.slamR, 0, Math.PI * 2); ctx.stroke();
+      } else if (m.pat === 'charge' && m.pt < PAT.chargeWind) {
+        const len = B.chargeSpeed * PAT.chargeDur;
+        ctx.translate(sx, sy); ctx.rotate(m.aim);
+        ctx.fillStyle = `rgba(255,60,50,${0.15 + 0.2 * (m.pt / PAT.chargeWind)})`;
+        ctx.fillRect(0, -m.r, len, m.r * 2);
+        ctx.setLineDash([8, 6]); ctx.strokeStyle = 'rgba(255,80,70,0.9)'; ctx.lineWidth = 2;
+        ctx.strokeRect(0, -m.r, len, m.r * 2);
+      } else if (m.pat === 'fan' && m.fired === 0) {
+        ctx.strokeStyle = `rgba(${B.shotColor},0.55)`; ctx.lineWidth = 2; ctx.setLineDash([6, 6]);
+        for (let s = 0; s < B.fanShots; s++) {
+          const a = m.aim + (s - (B.fanShots - 1) / 2) * B.fanSpread;
+          ctx.beginPath(); ctx.moveTo(sx + Math.cos(a) * m.r, sy + Math.sin(a) * m.r);
+          ctx.lineTo(sx + Math.cos(a) * (m.r + 160), sy + Math.sin(a) * (m.r + 160)); ctx.stroke();
+        }
+      } else if (m.pat === 'ring' && m.fired === 0) {
+        const k = m.pt / PAT.ringWind;
+        ctx.strokeStyle = `rgba(${B.shotColor},${0.4 + 0.5 * k})`; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(sx, sy, m.r + 30 - k * 22, 0, Math.PI * 2); ctx.stroke();
+      }
+      if (m.slamFx > 0) {
+        ctx.setLineDash([]);
+        ctx.strokeStyle = `rgba(255,200,120,${m.slamFx})`; ctx.lineWidth = 6;
+        ctx.beginPath(); ctx.arc(sx, sy, B.slamR * (1.05 - m.slamFx * 0.3), 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawEnemyShots() {
+    for (const s of enemyShots) {
+      const sx = s.x - cam.x, sy = s.y - cam.y;
+      if (sx < -30 || sy < -30 || sx > W + 30 || sy > H + 30) continue;
+      ctx.fillStyle = `rgba(${s.color},0.3)`;
+      ctx.beginPath(); ctx.arc(sx, sy, s.r * 1.8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = `rgb(${s.color})`;
+      ctx.beginPath(); ctx.arc(sx, sy, s.r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.beginPath(); ctx.arc(sx, sy, s.r * 0.45, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  function drawBanner() {
+    if (banner.t <= 0) return;
+    const a = Math.min(1, banner.t / 0.5);
+    ctx.font = 'bold 26px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const y = safeTop + 150;
+    ctx.lineWidth = 6; ctx.strokeStyle = `rgba(0,0,0,${0.75 * a})`;
+    ctx.strokeText(banner.text, W / 2, y);
+    ctx.fillStyle = `rgba(${banner.color},${a})`;
+    ctx.fillText(banner.text, W / 2, y);
+  }
+
   function drawHitboxes() {
     for (const m of monsters) {
       if (m.state !== 'windup' && m.state !== 'attack') continue;
@@ -703,6 +916,10 @@
         ctx.fillStyle = m.hit > 0 ? '#ffffff' : angry ? '#d63a2a' : '#a8281c';
         ctx.strokeStyle = '#4a0f0a';
         ctx.lineWidth = 3;
+      } else if (m.final) {
+        ctx.fillStyle = m.hit > 0 ? '#ffffff' : angry || m.pat ? '#4a2470' : '#2a1240';
+        ctx.strokeStyle = '#ffd24a';
+        ctx.lineWidth = 4;
       } else if (m.minion) {
         ctx.fillStyle = m.hit > 0 ? '#ffffff' : angry ? '#ff8a5c' : '#e8673c';
         ctx.strokeStyle = '#6a2410';
@@ -731,14 +948,27 @@
           ctx.closePath(); ctx.fill(); ctx.stroke();
         }
       }
+      // 최종 보스 왕관
+      if (m.final) {
+        const top = sy0 - wob - m.r + 4;
+        ctx.fillStyle = '#ffd24a'; ctx.strokeStyle = '#6a4a00'; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sx0 - 26, top + 6);
+        ctx.lineTo(sx0 - 26, top - 16); ctx.lineTo(sx0 - 13, top - 4);
+        ctx.lineTo(sx0, top - 22); ctx.lineTo(sx0 + 13, top - 4);
+        ctx.lineTo(sx0 + 26, top - 16); ctx.lineTo(sx0 + 26, top + 6);
+        ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#d63ad6';
+        ctx.beginPath(); ctx.arc(sx0, top - 2, 3.5, 0, Math.PI * 2); ctx.fill();
+      }
 
       // 눈
       const ex = sx0 + m.vx * 6 * sc, ey = sy0 - wob + (m.vy * 6 - 3) * sc;
-      ctx.fillStyle = m.boss ? '#ffe36a' : '#fff';
+      ctx.fillStyle = m.boss ? '#ffe36a' : m.final ? '#ff5af0' : '#fff';
       for (const side of [-1, 1]) {
         ctx.beginPath(); ctx.arc(ex + side * 6 * sc, ey, 4 * sc, 0, Math.PI * 2); ctx.fill();
       }
-      ctx.fillStyle = m.boss ? '#2a0000' : '#c0392b';
+      ctx.fillStyle = m.boss || m.final ? '#2a0000' : '#c0392b';
       for (const side of [-1, 1]) {
         ctx.beginPath(); ctx.arc(ex + side * 6 * sc + m.vx * 1.5 * sc, ey + m.vy * 1.5 * sc, 2 * sc, 0, Math.PI * 2); ctx.fill();
       }
@@ -756,6 +986,18 @@
         ctx.strokeText('중간 보스', sx, by0 - 10);
         ctx.fillStyle = '#ffb09a';
         ctx.fillText('중간 보스', sx, by0 - 10);
+      } else if (m.final) {
+        const bw = 140, by0 = sy - m.r - 46;
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(sx - bw / 2, by0, bw, 10);
+        ctx.fillStyle = '#c45aff';
+        ctx.fillRect(sx - bw / 2, by0, bw * Math.max(0, m.hp / m.maxHp), 10);
+        ctx.font = 'bold 14px system-ui, -apple-system, sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+        ctx.strokeText('최종 보스 · 끝판왕', sx, by0 - 11);
+        ctx.fillStyle = '#ffd24a';
+        ctx.fillText('최종 보스 · 끝판왕', sx, by0 - 11);
       } else if (m.hp < m.maxHp) {
         const bw = 30;
         ctx.fillStyle = 'rgba(0,0,0,0.5)';
@@ -930,11 +1172,14 @@
   function render() {
     drawWorld();
     drawItems();
+    drawBossTelegraphs();
     drawHitboxes();
     drawMonsters();
     drawBullets();
+    drawEnemyShots();
     drawPlayer();
     drawFloats();
+    drawBanner();
     drawStick();
     drawFireBtn();
     drawHud();
