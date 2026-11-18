@@ -181,7 +181,7 @@
   const banner = { text: '', t: 0, color: '255,214,90' };
   function finalMaxHp() {
     const w = curWeapon();
-    return power.dmg * (w.shots / gun.rate) * FINAL.fightSec;
+    return playerDmg() * (w.shots / fireRate()) * FINAL.fightSec;
   }
   function spawnFinal() {
     finalSpawned = true;
@@ -290,11 +290,58 @@
     const v = n / Math.pow(10000, u);
     return (v >= 100 ? Math.floor(v) : Math.floor(v * 10) / 10) + UNITS[u];
   }
+  // ===== 30초마다 강화 선택 (데미지 / 체력 / 연사 속도) =====
+  const PICK = {
+    every: 30,          // 초
+    dmgStep: 0.5,       // 데미지 선택 1번당 +50%
+    hpStep: 3,          // 체력 선택 1번당 최대 체력 +3 (그만큼 회복)
+    rateStep: 0.85,     // 연사 선택 1번당 발사 간격 ×0.85
+    minRate: 0.03
+  };
+  const pick = { t: 0, open: false, openT: 0, sel: 0, dmgN: 0, hpN: 0, rateN: 0 };
+  function dmgMul() { return 1 + PICK.dmgStep * pick.dmgN; }
+  function playerDmg() { return power.dmg * dmgMul(); }
+  function fireRate() { return Math.max(PICK.minRate, gun.rate * Math.pow(PICK.rateStep, pick.rateN)); }
+  const PICK_OPTIONS = [
+    { title: '데미지 증가', desc: () => '공격력 +50%  (지금 ×' + dmgMul() + ' → ×' + (dmgMul() + PICK.dmgStep) + ')', color: '255,140,90' },
+    { title: '체력 증가', desc: () => '최대 체력 +' + PICK.hpStep + '  (' + player.maxHp + ' → ' + (player.maxHp + PICK.hpStep) + ')', color: '120,230,140' },
+    { title: '총 쏘는 속도 증가', desc: () => '연사 속도 +' + Math.round((1 / PICK.rateStep - 1) * 100) + '%', color: '120,200,255' }
+  ];
+  function openPick() {
+    pick.open = true; pick.openT = 0; pick.sel = 0;
+    for (const k in keys) keys[k] = false;
+    stickEnd();
+    fireBtn.pressed = false; fireBtn.id = null;
+  }
+  function choosePick(i) {
+    if (!pick.open || pick.openT < 0.35) return;
+    pick.open = false;
+    if (i === 0) {
+      pick.dmgN++;
+      floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '데미지 증가! ×' + dmgMul(), color: PICK_OPTIONS[0].color });
+    } else if (i === 1) {
+      pick.hpN++;
+      player.maxHp += PICK.hpStep;
+      player.hp = Math.min(player.maxHp, player.hp + PICK.hpStep);
+      floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '최대 체력 +' + PICK.hpStep, color: PICK_OPTIONS[1].color });
+    } else {
+      pick.rateN++;
+      floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '연사 속도 증가!', color: PICK_OPTIONS[2].color });
+    }
+  }
+  function pickCardRects() {
+    const cw = Math.min(W - 40, 340), ch = 78, gap = 14;
+    const total = ch * 3 + gap * 2;
+    const y0 = Math.max(safeTop + 90, H / 2 - total / 2 + 20);
+    const x0 = (W - cw) / 2;
+    return [0, 1, 2].map(i => ({ x: x0, y: y0 + i * (ch + gap), w: cw, h: ch }));
+  }
+
   function eatItem() {
     power.level++;
     power.dmg = Math.pow(2, power.level);
     power.flash = 1;
-    floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '공격력 ×2 → ' + fmtPower(power.dmg) });
+    floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '공격력 ×2 → ' + fmtPower(playerDmg()) });
     tryUpgradeWeapon();
   }
 
@@ -340,6 +387,17 @@
   };
   const keyOf = e => KEYMAP[e.code] || KEYMAP_BY_KEY[e.key];
   document.addEventListener('keydown', e => {
+    if (pick.open) {
+      // 강화 선택: 1/2/3 바로 선택, 위아래로 고르고 Enter/Space로 결정
+      const n = { Digit1: 0, Digit2: 1, Digit3: 2, Numpad1: 0, Numpad2: 1, Numpad3: 2 }[e.code] ?? { '1': 0, '2': 1, '3': 2 }[e.key];
+      const k = keyOf(e);
+      if (n !== undefined) choosePick(n);
+      else if (k === 'up' || k === 'left') pick.sel = (pick.sel + 2) % 3;
+      else if (k === 'down' || k === 'right') pick.sel = (pick.sel + 1) % 3;
+      else if (!e.repeat && (k === 'fire' || e.key === 'Enter')) choosePick(pick.sel);
+      e.preventDefault();
+      return;
+    }
     const k = keyOf(e);
     if (k) { keys[k] = true; e.preventDefault(); }
   }, true);
@@ -389,6 +447,17 @@
   }
 
   canvas.addEventListener('pointerdown', e => {
+    if (pick.open) {
+      const rs = pickCardRects();
+      for (let i = 0; i < rs.length; i++) {
+        const r = rs[i];
+        if (e.clientX >= r.x && e.clientX <= r.x + r.w && e.clientY >= r.y && e.clientY <= r.y + r.h) {
+          pick.sel = i; choosePick(i); break;
+        }
+      }
+      e.preventDefault();
+      return;
+    }
     if (!fireBtn.pressed && onFireBtn(e.clientX, e.clientY)) {
       canvas.setPointerCapture(e.pointerId);
       fireBtn.pressed = true;
@@ -467,7 +536,7 @@
     gun.cooldown -= dt;
     gun.recoil = Math.max(0, gun.recoil - dt * 6);
     if ((keys.fire || fireBtn.pressed) && gun.cooldown <= 0) {
-      gun.cooldown = gun.rate;
+      gun.cooldown = fireRate();
       gun.recoil = 1;
       const w = curWeapon();
       const mx = player.x + player.dirX * (player.r + 14);
@@ -484,6 +553,10 @@
       }
     }
     weapon.fx = Math.max(0, weapon.fx - dt * 1.2);
+
+    // 30초마다 강화 선택
+    pick.t += dt;
+    if (pick.t >= PICK.every) { pick.t -= PICK.every; openPick(); return; }
 
     // 최종 보스: 5분 뒤 등장 + 체력을 플레이어 힘에 맞춤 (남은 비율 유지)
     gameTime += dt;
@@ -504,7 +577,7 @@
         for (let j = monsters.length - 1; j >= 0; j--) {
           const m = monsters[j];
           if (Math.hypot(b.x - m.x, b.y - m.y) < m.r + 4) {
-            m.hp -= power.dmg; m.hit = 0.12;
+            m.hp -= playerDmg(); m.hit = 0.12;
             m.x += b.vx / b.spd * 6; m.y += b.vy / b.spd * 6;
             dead = true;
             if (m.hp <= 0) {
@@ -1063,7 +1136,7 @@
   }
 
   function drawHud() {
-    const text = '공격력 ' + fmtPower(power.dmg);
+    const text = '공격력 ' + fmtPower(playerDmg());
     const size = 17 + power.flash * 6;
     ctx.font = `bold ${size}px system-ui, -apple-system, sans-serif`;
     ctx.textAlign = 'left';
@@ -1183,6 +1256,44 @@
     drawStick();
     drawFireBtn();
     drawHud();
+    drawPick();
+  }
+
+  function drawPick() {
+    if (!pick.open) return;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, W, H);
+    const rs = pickCardRects();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+    ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+    ctx.strokeText('강화 선택!', W / 2, rs[0].y - 44);
+    ctx.fillStyle = '#ffd65a';
+    ctx.fillText('강화 선택!', W / 2, rs[0].y - 44);
+    ctx.font = '13px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.fillText('하나를 눌러서 고르세요 (키보드 1 · 2 · 3)', W / 2, rs[0].y - 18);
+    const ready = pick.openT >= 0.35;
+    for (let i = 0; i < 3; i++) {
+      const r = rs[i], o = PICK_OPTIONS[i], on = pick.sel === i;
+      ctx.globalAlpha = ready ? 1 : 0.6;
+      ctx.fillStyle = on ? 'rgba(' + o.color + ',0.28)' : 'rgba(30,34,40,0.92)';
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = 'rgb(' + o.color + ')';
+      ctx.lineWidth = on ? 4 : 2;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = 'rgb(' + o.color + ')';
+      ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
+      ctx.fillText(String(i + 1), r.x + 12, r.y + 16);
+      ctx.font = 'bold 20px system-ui, -apple-system, sans-serif';
+      ctx.fillText(o.title, r.x + 30, r.y + r.h / 2 - 11);
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.font = '13px system-ui, -apple-system, sans-serif';
+      ctx.fillText(o.desc(), r.x + 30, r.y + r.h / 2 + 15);
+    }
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'center';
   }
 
   // ===== 루프 =====
@@ -1190,7 +1301,7 @@
   function loop(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    update(dt);
+    if (pick.open) pick.openT += dt; else update(dt);
     render();
     requestAnimationFrame(loop);
   }
