@@ -79,6 +79,33 @@
     floats.push({ x: player.x, y: player.y - player.r - 36, t: 0, text: '무기 업그레이드! → ' + w.name, color: w.color });
   }
 
+  // ===== 스테이지 (최종 보스를 잡으면 포탈이 열리고, 들어가면 다음 스테이지) =====
+  const STAGE_THEMES = [
+    { name: '초원', ground: '#3f5a3c', grid: 'rgba(255,255,255,0.05)', outside: '#1b1f24', lava: false,
+      mon: { fill: '#8e44ad', angry: '#b0388f', stroke: '#4a1f5c' }, color: '160,230,140' },
+    { name: '화산 지대', ground: '#4a2c26', grid: 'rgba(255,170,120,0.06)', outside: '#140b09', lava: true,
+      mon: { fill: '#3b3a48', angry: '#6a3a4a', stroke: '#0f0e15' }, color: '255,150,80' }
+  ];
+  const STAGE = {
+    hpGrow: 0.5,    // 다음 스테이지 몬스터 체력: 들어갈 때 내 공격력 기준 +50%씩
+    dmgGrow: 0.5,   // 스테이지마다 몬스터 공격력 +50%
+    spdGrow: 0.15   // 스테이지마다 몬스터 속도 +15%
+  };
+  const stage = { n: 1, hpMul: 1 };
+  function stageGrow(g) { return 1 + g * (stage.n - 1); }
+  function stageTheme() { return STAGE_THEMES[Math.min(stage.n, STAGE_THEMES.length) - 1]; }
+  let portal = null;
+  const TRANS_HALF = 0.6;
+  const trans = { active: false, t: 0, switched: false };
+  // 화산 지대 바닥 장식 (용암 웅덩이 — 밟아도 아무 일 없음)
+  const LAVA = [];
+  for (let i = 0; i < 46; i++) {
+    let x, y;
+    do { x = 120 + Math.random() * (WORLD.w - 240); y = 120 + Math.random() * (WORLD.h - 240); }
+    while (Math.hypot(x - WORLD.w / 2, y - WORLD.h / 2) < 260);
+    LAVA.push({ x, y, rx: 26 + Math.random() * 46, ry: 16 + Math.random() * 26, rot: Math.random() * Math.PI, ph: Math.random() * 6 });
+  }
+
   // ===== 몬스터 =====
   const MONSTER_COUNT = 30;
   const monsters = [];
@@ -92,7 +119,7 @@
     } while (Math.hypot(x - player.x, y - player.y) < 500 && tries < 50);
     const a = Math.random() * Math.PI * 2;
     monsters.push({
-      x, y, r: 18, hp: 3, maxHp: 3, speed: 50 + Math.random() * 30,
+      x, y, r: 18, hp: 3 * stage.hpMul, maxHp: 3 * stage.hpMul, speed: (50 + Math.random() * 30) * stageGrow(STAGE.spdGrow),
       vx: Math.cos(a), vy: Math.sin(a), turn: 1 + Math.random() * 2,
       hit: 0, t: Math.random() * 10,
       state: 'wander', st: 0, atkCd: Math.random(), ax: 0, ay: 1, dealt: false
@@ -117,6 +144,7 @@
   const SPAWN = { x: WORLD.w / 2, y: WORLD.h / 2 };
   function hurtPlayer(dmg, fromX, fromY) {
     if (player.invuln > 0) return;
+    dmg = Math.ceil(dmg * stageGrow(STAGE.dmgGrow));   // 스테이지가 오를수록 아프게
     player.hp = Math.max(0, player.hp - dmg);
     player.invuln = 0.7;
     player.hurt = 0.3;
@@ -155,7 +183,7 @@
   let bossRespawn = 0;
   function spawnBoss() {
     monsters.push({
-      boss: true, x: BOSS.x, y: BOSS.y, r: BOSS.r, hp: BOSS.hp, maxHp: BOSS.hp, speed: BOSS.speed,
+      boss: true, x: BOSS.x, y: BOSS.y, r: BOSS.r, hp: BOSS.hp * stage.hpMul, maxHp: BOSS.hp * stage.hpMul, speed: BOSS.speed * stageGrow(STAGE.spdGrow),
       vx: 0, vy: 1, turn: 2, hit: 0, t: 0,
       state: 'wander', st: 0, atkCd: 1, ax: 0, ay: 1, dealt: false,
       reach: 34, hbR: 38, dmg: 2,
@@ -180,8 +208,7 @@
   let gameTime = 0, finalSpawned = false;
   const banner = { text: '', t: 0, color: '255,214,90' };
   function finalMaxHp() {
-    const w = curWeapon();
-    return playerDmg() * (w.shots / fireRate()) * FINAL.fightSec;
+    return playerDmg() * (totalShots() / fireRate()) * FINAL.fightSec * stageGrow(STAGE.hpGrow);
   }
   function spawnFinal() {
     finalSpawned = true;
@@ -267,7 +294,7 @@
     const d = boss.r + 22;
     monsters.push({
       minion: true, x: boss.x + Math.cos(a) * d, y: boss.y + Math.sin(a) * d,
-      r: 11, hp: 1, maxHp: 1, speed: 85 + Math.random() * 30,
+      r: 11, hp: stage.hpMul, maxHp: stage.hpMul, speed: (85 + Math.random() * 30) * stageGrow(STAGE.spdGrow),
       vx: Math.cos(a), vy: Math.sin(a), turn: 0.5 + Math.random(),
       hit: 0, t: Math.random() * 10,
       state: 'wander', st: 0, atkCd: 0.8 + Math.random(), ax: 0, ay: 1, dealt: false,
@@ -284,50 +311,112 @@
   const UNITS = ['', '만', '억', '조', '경', '해', '자', '양', '구', '간', '정', '재', '극'];
   function fmtPower(n) {
     if (!isFinite(n)) return '∞';
-    if (n < 10000) return String(n);
+    if (n < 10000) return String(Math.round(n * 10) / 10);
     const u = Math.floor(Math.log10(n) / 4);
     if (u >= UNITS.length) return '2^' + power.level;
     const v = n / Math.pow(10000, u);
     return (v >= 100 ? Math.floor(v) : Math.floor(v * 10) / 10) + UNITS[u];
   }
-  // ===== 30초마다 강화 선택 (데미지 / 체력 / 연사 속도) =====
+  // ===== 30초마다 능력 선택 (여러 능력 중 무작위 3장) + 가끔 잭팟 =====
   const PICK = {
     every: 30,          // 초
     dmgStep: 0.5,       // 데미지 선택 1번당 +50%
     hpStep: 3,          // 체력 선택 1번당 최대 체력 +3 (그만큼 회복)
     rateStep: 0.85,     // 연사 선택 1번당 발사 간격 ×0.85
-    minRate: 0.03
+    minRate: 0.03,
+    jackpotChance: 0.1, // 잭팟 확률 10% — 좋은 능력 3장 중에서 고름
+    speedStep: 0.12,    // 이동 속도 선택 1번당 +12%
+    speedMax: 5,
+    regenBase: 8,       // 체력 재생: 처음엔 8초마다 1 회복
+    regenStep: 0.75,    // 다시 고를 때마다 간격 ×0.75
+    magnetStep: 110     // 아이템 자석: 선택 1번당 끌어오는 범위 +110
   };
-  const pick = { t: 0, open: false, openT: 0, sel: 0, dmgN: 0, hpN: 0, rateN: 0 };
+  const BASE_SPEED = player.speed;
+  const pick = {
+    t: 0, open: false, openT: 0, sel: 0, dmgN: 0, hpN: 0, rateN: 0,
+    jackpot: false, cards: [],
+    speedN: 0, pierceN: 0, regenN: 0, regenT: 0, magnetN: 0,
+    bladeN: 0, bladeA: 0, extraShots: 0, homing: false, boltN: 0, boltT: 0
+  };
   function dmgMul() { return 1 + PICK.dmgStep * pick.dmgN; }
-  function playerDmg() { return power.dmg * dmgMul(); }
-  function fireRate() { return Math.max(PICK.minRate, gun.rate * Math.pow(PICK.rateStep, pick.rateN)); }
+  function playerDmg() { return power.dmg * dmgMul() * coinDmgMul(); }
+  function fireRate() { return Math.max(PICK.minRate, gun.rate * Math.pow(PICK.rateStep, pick.rateN) * Math.pow(SHOP.rateStep, shop.lv[2])); }
+  function totalShots() { return curWeapon().shots + pick.extraShots; }
+  function regenEvery(n) { return Math.max(1, PICK.regenBase * Math.pow(PICK.regenStep, n - 1)); }
+  function magnetRange() { return PICK.magnetStep * pick.magnetN; }
+  function sayPick(text, color) { floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text, color }); }
+
+  // 잭팟 능력 수치
+  const BLADE = { orbit: 74, r: 13, spin: 3.6, cd: 0.25, first: 3, more: 2, max: 9 };
+  const BOLT = { every: 1.5, range: 360, mul: 3, first: 3, more: 2, max: 4 };
+  const bolts = [];
+
+  // 평소 능력 (기존 3개 + 새 능력)
   const PICK_OPTIONS = [
-    { title: '데미지 증가', desc: () => '공격력 +50%  (지금 ×' + dmgMul() + ' → ×' + (dmgMul() + PICK.dmgStep) + ')', color: '255,140,90' },
-    { title: '체력 증가', desc: () => '최대 체력 +' + PICK.hpStep + '  (' + player.maxHp + ' → ' + (player.maxHp + PICK.hpStep) + ')', color: '120,230,140' },
-    { title: '총 쏘는 속도 증가', desc: () => '연사 속도 +' + Math.round((1 / PICK.rateStep - 1) * 100) + '%', color: '120,200,255' }
+    { title: '데미지 증가', desc: () => '공격력 +50%  (지금 ×' + dmgMul() + ' → ×' + (dmgMul() + PICK.dmgStep) + ')', color: '255,140,90',
+      apply() { pick.dmgN++; sayPick('데미지 증가! ×' + dmgMul(), this.color); } },
+    { title: '체력 증가', desc: () => '최대 체력 +' + PICK.hpStep + '  (' + player.maxHp + ' → ' + (player.maxHp + PICK.hpStep) + ')', color: '120,230,140',
+      apply() {
+        pick.hpN++;
+        player.maxHp += PICK.hpStep;
+        player.hp = Math.min(player.maxHp, player.hp + PICK.hpStep);
+        sayPick('최대 체력 +' + PICK.hpStep, this.color);
+      } },
+    { title: '총 쏘는 속도 증가', desc: () => '연사 속도 +' + Math.round((1 / PICK.rateStep - 1) * 100) + '%', color: '120,200,255',
+      apply() { pick.rateN++; sayPick('연사 속도 증가!', this.color); } },
+    { title: '이동 속도 증가', desc: () => '걷는 속도 +' + Math.round(PICK.speedStep * 100) + '%' + (pick.speedN ? '  (지금 +' + Math.round(PICK.speedStep * pick.speedN * 100) + '%)' : ''), color: '255,220,110',
+      can: () => pick.speedN < PICK.speedMax,
+      apply() { pick.speedN++; player.speed = BASE_SPEED * (1 + PICK.speedStep * pick.speedN); sayPick('이동 속도 증가!', this.color); } },
+    { title: '관통탄', desc: () => '총알이 몬스터를 ' + (pick.pierceN + 1) + '마리 더 뚫고 지나감', color: '200,170,255',
+      apply() { pick.pierceN++; sayPick('관통탄! +' + pick.pierceN, this.color); } },
+    { title: '체력 재생', desc: () => (Math.round(regenEvery(pick.regenN + 1) * 10) / 10) + '초마다 체력 1씩 회복', color: '90,220,190',
+      apply() { pick.regenN++; pick.regenT = 0; sayPick('체력 재생!', this.color); } },
+    { title: '아이템 자석', desc: () => '떨어진 아이템을 끌어옴  (범위 ' + (magnetRange() + PICK.magnetStep) + ')', color: '255,120,150',
+      apply() { pick.magnetN++; sayPick('아이템 자석!', this.color); } }
   ];
+
+  // 잭팟 능력 (10% 확률로 이 중에서 3장)
+  const JACKPOT_OPTIONS = [
+    { title: '회전 칼날', desc: () => pick.bladeN ? '도는 칼날 +' + BLADE.more + '개  (지금 ' + pick.bladeN + '개)' : '몸 주위를 도는 칼날 ' + BLADE.first + '개가 적을 벰', color: '255,214,90',
+      can: () => pick.bladeN < BLADE.max,
+      apply() { pick.bladeN = Math.min(BLADE.max, pick.bladeN ? pick.bladeN + BLADE.more : BLADE.first); sayPick('잭팟! 회전 칼날', this.color); } },
+    { title: '총알 +2발', desc: () => '한 번 쏠 때 총알이 2발 더 나감' + (pick.extraShots ? '  (지금 +' + pick.extraShots + ')' : ''), color: '255,170,70',
+      can: () => pick.extraShots < 8,
+      apply() { pick.extraShots += 2; sayPick('잭팟! 총알 +2발', this.color); } },
+    { title: '유도탄', desc: () => '총알이 가까운 몬스터를 따라감', color: '120,232,255',
+      can: () => !pick.homing,
+      apply() { pick.homing = true; sayPick('잭팟! 유도탄', this.color); } },
+    { title: '번개', desc: () => pick.boltN ? '번개 맞는 적 +' + BOLT.more + '마리  (지금 ' + boltTargets() + '마리)' : BOLT.every + '초마다 가까운 적 ' + BOLT.first + '마리에 번개',
+      color: '170,200,255',
+      can: () => pick.boltN < BOLT.max,
+      apply() { pick.boltN++; pick.boltT = 0.3; sayPick('잭팟! 번개', this.color); } },
+    { title: '황금 심장', desc: () => '최대 체력 +10, 체력 전부 회복', color: '255,110,110',
+      apply() { player.maxHp += 10; player.hp = player.maxHp; sayPick('잭팟! 최대 체력 +10', this.color); } }
+  ];
+  function boltTargets() { return BOLT.first + BOLT.more * Math.max(0, pick.boltN - 1); }
+
+  function rollCards(pool, n, except) {
+    const a = pool.filter(o => (!o.can || o.can()) && !(except || []).includes(o));
+    for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+    return a.slice(0, n);
+  }
+  function pickReadyT() { return pick.jackpot ? 0.6 : 0.35; }
   function openPick() {
     pick.open = true; pick.openT = 0; pick.sel = 0;
+    pick.jackpot = Math.random() < PICK.jackpotChance;
+    pick.cards = rollCards(pick.jackpot ? JACKPOT_OPTIONS : PICK_OPTIONS, 3);
+    // 잭팟 능력을 거의 다 모았으면 남는 칸은 평소 능력으로 채움
+    if (pick.cards.length < 3) pick.cards = pick.cards.concat(rollCards(PICK_OPTIONS, 3 - pick.cards.length, pick.cards));
     for (const k in keys) keys[k] = false;
     stickEnd();
     fireBtn.pressed = false; fireBtn.id = null;
   }
   function choosePick(i) {
-    if (!pick.open || pick.openT < 0.35) return;
+    if (!pick.open || pick.openT < pickReadyT()) return;
+    const o = pick.cards[i];
+    if (!o) return;
     pick.open = false;
-    if (i === 0) {
-      pick.dmgN++;
-      floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '데미지 증가! ×' + dmgMul(), color: PICK_OPTIONS[0].color });
-    } else if (i === 1) {
-      pick.hpN++;
-      player.maxHp += PICK.hpStep;
-      player.hp = Math.min(player.maxHp, player.hp + PICK.hpStep);
-      floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '최대 체력 +' + PICK.hpStep, color: PICK_OPTIONS[1].color });
-    } else {
-      pick.rateN++;
-      floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '연사 속도 증가!', color: PICK_OPTIONS[2].color });
-    }
+    o.apply();
   }
   function pickCardRects() {
     const cw = Math.min(W - 40, 340), ch = 78, gap = 14;
@@ -335,6 +424,126 @@
     const y0 = Math.max(safeTop + 90, H / 2 - total / 2 + 20);
     const x0 = (W - cw) / 2;
     return [0, 1, 2].map(i => ({ x: x0, y: y0 + i * (ch + gap), w: cw, h: ch }));
+  }
+
+  // ===== 코인 (몬스터가 떨어뜨림) → 코인으로 강화 =====
+  const coins = [];
+  const COIN = { r: 7, normal: 1, minion: 1, boss: 10, final: 20 };   // 떨어뜨리는 개수 (1개 = 스테이지 번호만큼)
+  const SHOP = {
+    dmgStep: 0.3,     // 무기 강화 1번당 공격력 +30%
+    hpStep: 3,        // 체력 강화 1번당 최대 체력 +3 (체력 전부 회복)
+    rateStep: 0.9,    // 연사 강화 1번당 발사 간격 ×0.9
+    baseCost: 5, costGrow: 1.5   // 가격: 5 → 7 → 11 → 16 → 25 ...
+  };
+  const shop = { open: false, openT: 0, sel: 0, coins: 0, lv: [0, 0, 0], fx: [0, 0, 0], shake: [0, 0, 0], coinFx: 0, msg: '', msgColor: '255,255,255', msgT: 0 };
+  function coinDmgMul() { return 1 + SHOP.dmgStep * shop.lv[0]; }
+  function shopCost(i) { return Math.floor(SHOP.baseCost * Math.pow(SHOP.costGrow, shop.lv[i])); }
+  function r1(n) { return Math.round(n * 10) / 10; }
+  const SHOP_ITEMS = [
+    { title: '무기 강화', color: '255,140,90',
+      desc: () => '공격력 +' + Math.round(SHOP.dmgStep * 100) + '%  (×' + r1(coinDmgMul()) + ' → ×' + r1(coinDmgMul() + SHOP.dmgStep) + ')',
+      apply() { shop.lv[0]++; } },
+    { title: '체력 강화', color: '120,230,140',
+      desc: () => '최대 체력 +' + SHOP.hpStep + ', 체력 전부 회복  (' + player.maxHp + ' → ' + (player.maxHp + SHOP.hpStep) + ')',
+      apply() { shop.lv[1]++; player.maxHp += SHOP.hpStep; player.hp = player.maxHp; } },
+    { title: '연사 강화', color: '120,200,255',
+      desc: () => SHOP_ITEMS[2].can() ? '총 쏘는 속도 +' + Math.round((1 / SHOP.rateStep - 1) * 100) + '%' : '이미 가장 빠름',
+      can: () => fireRate() > PICK.minRate,
+      apply() { shop.lv[2]++; } }
+  ];
+  function shopMsg(text, color) { shop.msg = text; shop.msgColor = color; shop.msgT = 1.6; }
+  function buyShop(i) {
+    const it = SHOP_ITEMS[i];
+    if (!shop.open || !it) return;
+    shop.sel = i;
+    if (it.can && !it.can()) { shopMsg('더 강화할 수 없어요', '255,200,120'); shop.shake[i] = 1; return; }
+    const cost = shopCost(i);
+    if (shop.coins < cost) { shopMsg('코인이 부족해요 (' + (cost - shop.coins) + '개 더 필요)', '255,110,100'); shop.shake[i] = 1; return; }
+    shop.coins -= cost;
+    it.apply();
+    shop.fx[i] = 1;
+    shopMsg(it.title + ' 성공!  +' + shop.lv[i], it.color);
+  }
+  function canBuyAny() {
+    for (let i = 0; i < SHOP_ITEMS.length; i++) {
+      const it = SHOP_ITEMS[i];
+      if ((!it.can || it.can()) && shop.coins >= shopCost(i)) return true;
+    }
+    return false;
+  }
+  function openShop() {
+    if (shop.open || pick.open || trans.active) return;
+    shop.open = true; shop.openT = 0; shop.msgT = 0;
+    for (const k in keys) keys[k] = false;
+    stickEnd();
+    fireBtn.pressed = false; fireBtn.id = null;
+  }
+  function closeShop() { shop.open = false; }
+  function updateShopUi(dt) {
+    shop.openT += dt;
+    shop.msgT = Math.max(0, shop.msgT - dt);
+    for (let i = 0; i < 3; i++) {
+      shop.fx[i] = Math.max(0, shop.fx[i] - dt * 2.5);
+      shop.shake[i] = Math.max(0, shop.shake[i] - dt * 3);
+    }
+  }
+  function shopBtnRect() { return { x: W - 12 - 96, y: safeTop + 12 + 34 + 6, w: 96, h: 34 }; }
+  function shopCloseRect() {
+    const last = pickCardRects()[2];
+    return { x: W / 2 - 80, y: last.y + last.h + 46, w: 160, h: 44 };
+  }
+  function inRect(x, y, r) { return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
+  function dropCoins(x, y, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = n > 1 ? 50 + Math.random() * (n > 10 ? 170 : 120) : 30 + Math.random() * 30;
+      coins.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, t: 0, v: stage.n, ph: Math.random() * 6 });
+    }
+  }
+
+  // ===== 포탈 → 다음 스테이지 =====
+  function openPortal(x, y) {
+    portal = { x: Math.max(80, Math.min(WORLD.w - 80, x)), y: Math.max(80, Math.min(WORLD.h - 80, y)), r: 34, t: 0 };
+    floats.push({ x: player.x, y: player.y - player.r - 60, t: 0, text: '포탈이 열렸다! → 스테이지 ' + (stage.n + 1), color: '150,220,255' });
+  }
+  function goNextStage() {
+    stage.n++;
+    // 다음 스테이지 몬스터는 들어가는 순간의 내 공격력에 맞춰 단단해짐
+    stage.hpMul = Math.max(1, playerDmg()) * stageGrow(STAGE.hpGrow);
+    monsters.length = 0; enemyShots.length = 0; bullets.length = 0;
+    items.length = 0; coins.length = 0; poofs.length = 0; bolts.length = 0; floats.length = 0;
+    respawnQueue = [];
+    portal = null; bossRespawn = 0; finalSpawned = false; gameTime = 0;
+    player.x = SPAWN.x; player.y = SPAWN.y; player.kbx = player.kby = 0; player.invuln = 1.5;
+    for (let i = 0; i < MONSTER_COUNT; i++) spawnMonster();
+    spawnBoss();
+    const th = stageTheme();
+    banner.text = '스테이지 ' + stage.n + ' · ' + th.name; banner.t = 3; banner.color = th.color;
+    cam.x = player.x - W / 2; cam.y = player.y - H / 2;
+  }
+  function updateTrans(dt) {
+    trans.t += dt;
+    if (!trans.switched && trans.t >= TRANS_HALF) { trans.switched = true; goNextStage(); }
+    if (trans.t >= TRANS_HALF * 2.2) trans.active = false;
+  }
+
+  function damageMonster(m, dmg, kx, ky) {
+    m.hp -= dmg; m.hit = 0.12;
+    m.x += kx; m.y += ky;
+    if (m.hp > 0) return;
+    const j = monsters.indexOf(m);
+    if (j < 0) return;
+    poofs.push({ x: m.x, y: m.y, t: 0 });
+    items.push({ x: m.x, y: m.y, r: 11, t: 0 });
+    dropCoins(m.x, m.y, m.boss ? COIN.boss : m.final ? COIN.final : m.minion ? COIN.minion : COIN.normal);
+    monsters.splice(j, 1);
+    if (m.boss) {
+      bossRespawn = BOSS.respawn;
+      floats.push({ x: m.x, y: m.y - m.r - 20, t: 0, text: '중간 보스 처치!', color: '255,120,90' });
+    } else if (m.final) {
+      banner.text = '최종 보스 처치!'; banner.t = 3; banner.color = '255,214,90';
+      openPortal(m.x, m.y);
+    } else if (!m.minion) respawnQueue.push(3);
   }
 
   function eatItem() {
@@ -388,16 +597,30 @@
   const keyOf = e => KEYMAP[e.code] || KEYMAP_BY_KEY[e.key];
   document.addEventListener('keydown', e => {
     if (pick.open) {
-      // 강화 선택: 1/2/3 바로 선택, 위아래로 고르고 Enter/Space로 결정
+      // 능력 선택: 1/2/3 바로 선택, 위아래로 고르고 Enter/Space로 결정
       const n = { Digit1: 0, Digit2: 1, Digit3: 2, Numpad1: 0, Numpad2: 1, Numpad3: 2 }[e.code] ?? { '1': 0, '2': 1, '3': 2 }[e.key];
       const k = keyOf(e);
       if (n !== undefined) choosePick(n);
-      else if (k === 'up' || k === 'left') pick.sel = (pick.sel + 2) % 3;
-      else if (k === 'down' || k === 'right') pick.sel = (pick.sel + 1) % 3;
+      else if (k === 'up' || k === 'left') pick.sel = (pick.sel + pick.cards.length - 1) % pick.cards.length;
+      else if (k === 'down' || k === 'right') pick.sel = (pick.sel + 1) % pick.cards.length;
       else if (!e.repeat && (k === 'fire' || e.key === 'Enter')) choosePick(pick.sel);
       e.preventDefault();
       return;
     }
+    const isShopKey = e.code === 'KeyE' || e.key === 'e' || e.key === 'E' || e.key === 'ㄷ';
+    if (shop.open) {
+      // 코인 강화: 1/2/3 바로 강화, 위아래로 고르고 Enter/Space로 강화, E/Esc로 닫기
+      const n = { Digit1: 0, Digit2: 1, Digit3: 2, Numpad1: 0, Numpad2: 1, Numpad3: 2 }[e.code] ?? { '1': 0, '2': 1, '3': 2 }[e.key];
+      const k = keyOf(e);
+      if (n !== undefined) { if (!e.repeat) buyShop(n); }
+      else if (k === 'up' || k === 'left') shop.sel = (shop.sel + 2) % 3;
+      else if (k === 'down' || k === 'right') shop.sel = (shop.sel + 1) % 3;
+      else if (!e.repeat && (k === 'fire' || e.key === 'Enter')) buyShop(shop.sel);
+      else if (!e.repeat && (isShopKey || e.key === 'Escape')) closeShop();
+      e.preventDefault();
+      return;
+    }
+    if (isShopKey && !e.repeat) { openShop(); e.preventDefault(); return; }
     const k = keyOf(e);
     if (k) { keys[k] = true; e.preventDefault(); }
   }, true);
@@ -455,6 +678,20 @@
           pick.sel = i; choosePick(i); break;
         }
       }
+      e.preventDefault();
+      return;
+    }
+    if (shop.open) {
+      const rs = pickCardRects();
+      for (let i = 0; i < rs.length; i++) {
+        if (inRect(e.clientX, e.clientY, rs[i])) { buyShop(i); break; }
+      }
+      if (inRect(e.clientX, e.clientY, shopCloseRect())) closeShop();
+      e.preventDefault();
+      return;
+    }
+    if (inRect(e.clientX, e.clientY, shopBtnRect())) {
+      openShop();
       e.preventDefault();
       return;
     }
@@ -542,13 +779,16 @@
       const mx = player.x + player.dirX * (player.r + 14);
       const my = player.y + player.dirY * (player.r + 14);
       const base = Math.atan2(player.dirY, player.dirX);
-      for (let s = 0; s < w.shots; s++) {
-        const a = base + (s - (w.shots - 1) / 2) * w.spread;
+      const shots = totalShots();
+      const spread = w.spread || (shots > 1 ? 0.12 : 0);
+      for (let s = 0; s < shots; s++) {
+        const a = base + (s - (shots - 1) / 2) * spread;
         bullets.push({
           x: mx, y: my,
           vx: Math.cos(a) * gun.bulletSpeed, vy: Math.sin(a) * gun.bulletSpeed,
           spd: gun.bulletSpeed, color: w.color, glow: w.glow,
-          life: gun.bulletLife
+          life: gun.bulletLife,
+          pierce: pick.pierceN, hits: pick.pierceN ? [] : null, homing: pick.homing
         });
       }
     }
@@ -571,31 +811,98 @@
     // 총알 이동 + 몬스터 명중
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
+      if (b.homing) {
+        // 유도탄: 가까운 몬스터 쪽으로 방향을 틈
+        let best = null, bd = 380;
+        for (const m of monsters) {
+          if (b.hits && b.hits.includes(m)) continue;
+          const d = Math.hypot(m.x - b.x, m.y - b.y);
+          if (d < bd) { bd = d; best = m; }
+        }
+        if (best) {
+          let cur = Math.atan2(b.vy, b.vx);
+          const want = Math.atan2(best.y - b.y, best.x - b.x);
+          const diff = ((want - cur + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+          const turn = 10 * dt;
+          cur += Math.max(-turn, Math.min(turn, diff));
+          b.vx = Math.cos(cur) * b.spd; b.vy = Math.sin(cur) * b.spd;
+        }
+      }
       b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
       let dead = b.life <= 0 || b.x < 0 || b.y < 0 || b.x > WORLD.w || b.y > WORLD.h;
       if (!dead) {
         for (let j = monsters.length - 1; j >= 0; j--) {
           const m = monsters[j];
+          if (b.hits && b.hits.includes(m)) continue;   // 관통탄: 이미 뚫은 몬스터는 건너뜀
           if (Math.hypot(b.x - m.x, b.y - m.y) < m.r + 4) {
-            m.hp -= playerDmg(); m.hit = 0.12;
-            m.x += b.vx / b.spd * 6; m.y += b.vy / b.spd * 6;
-            dead = true;
-            if (m.hp <= 0) {
-              poofs.push({ x: m.x, y: m.y, t: 0 });
-              items.push({ x: m.x, y: m.y, r: 11, t: 0 });
-              monsters.splice(j, 1);
-              if (m.boss) {
-                bossRespawn = BOSS.respawn;
-                floats.push({ x: m.x, y: m.y - m.r - 20, t: 0, text: '중간 보스 처치!', color: '255,120,90' });
-              } else if (m.final) {
-                banner.text = '최종 보스 처치!'; banner.t = 3; banner.color = '255,214,90';
-              } else if (!m.minion) respawnQueue.push(3);
-            }
+            damageMonster(m, playerDmg(), b.vx / b.spd * 6, b.vy / b.spd * 6);
+            if (b.pierce > 0) { b.pierce--; b.hits.push(m); }
+            else dead = true;
             break;
           }
         }
       }
       if (dead) bullets.splice(i, 1);
+    }
+
+    // 잭팟: 회전 칼날
+    if (pick.bladeN > 0) {
+      pick.bladeA += dt * BLADE.spin;
+      for (const m of monsters.slice()) {
+        m.bladeCd = Math.max(0, (m.bladeCd || 0) - dt);
+        if (m.bladeCd > 0) continue;
+        for (let k = 0; k < pick.bladeN; k++) {
+          const a = pick.bladeA + k * Math.PI * 2 / pick.bladeN;
+          const bx = player.x + Math.cos(a) * BLADE.orbit, by = player.y + Math.sin(a) * BLADE.orbit;
+          if (Math.hypot(m.x - bx, m.y - by) < m.r + BLADE.r) {
+            m.bladeCd = BLADE.cd;
+            const dx = m.x - player.x, dy = m.y - player.y, d = Math.hypot(dx, dy) || 1;
+            damageMonster(m, playerDmg(), dx / d * 6, dy / d * 6);
+            break;
+          }
+        }
+      }
+    }
+    // 잭팟: 번개 (일정 시간마다 가까운 적 여러 마리)
+    if (pick.boltN > 0) {
+      pick.boltT -= dt;
+      if (pick.boltT <= 0) {
+        const near = monsters
+          .map(m => ({ m, d: Math.hypot(m.x - player.x, m.y - player.y) }))
+          .filter(o => o.d < BOLT.range)
+          .sort((a, b) => a.d - b.d)
+          .slice(0, boltTargets());
+        if (near.length) {
+          pick.boltT = BOLT.every;
+          for (const { m } of near) {
+            const pts = [{ x: player.x, y: player.y }];
+            for (let k = 1; k < 6; k++) {
+              const f = k / 6, nx = -(m.y - player.y), ny = m.x - player.x, nl = Math.hypot(nx, ny) || 1;
+              const off = (Math.random() - 0.5) * 34;
+              pts.push({ x: player.x + (m.x - player.x) * f + nx / nl * off, y: player.y + (m.y - player.y) * f + ny / nl * off });
+            }
+            pts.push({ x: m.x, y: m.y });
+            bolts.push({ pts, t: 0 });
+            damageMonster(m, playerDmg() * BOLT.mul, 0, 0);
+          }
+        } else pick.boltT = 0.2;
+      }
+    }
+    for (let i = bolts.length - 1; i >= 0; i--) {
+      bolts[i].t += dt;
+      if (bolts[i].t > 0.25) bolts.splice(i, 1);
+    }
+    // 체력 재생
+    if (pick.regenN > 0) {
+      pick.regenT += dt;
+      const ev = regenEvery(pick.regenN);
+      if (pick.regenT >= ev) {
+        pick.regenT -= ev;
+        if (player.hp < player.maxHp) {
+          player.hp++;
+          floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '+1', color: '90,220,190' });
+        }
+      }
     }
 
     // 몬스터 돌아다니기
@@ -695,9 +1002,46 @@
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
       it.t += dt;
+      if (pick.magnetN > 0) {
+        const dx = player.x - it.x, dy = player.y - it.y, d = Math.hypot(dx, dy);
+        if (d < magnetRange() + player.r && d > 0) {
+          const mv = Math.min(d, 520 * dt);
+          it.x += dx / d * mv; it.y += dy / d * mv;
+        }
+      }
       if (Math.hypot(it.x - player.x, it.y - player.y) < player.r + it.r) {
         items.splice(i, 1);
         eatItem();
+      }
+    }
+    // 코인 줍기 (닿으면 주움)
+    for (let i = coins.length - 1; i >= 0; i--) {
+      const c = coins[i];
+      c.t += dt;
+      c.x += c.vx * dt; c.y += c.vy * dt;
+      const fr = Math.exp(-dt * 5); c.vx *= fr; c.vy *= fr;
+      c.x = Math.max(COIN.r, Math.min(WORLD.w - COIN.r, c.x));
+      c.y = Math.max(COIN.r, Math.min(WORLD.h - COIN.r, c.y));
+      if (c.t < 0.3) continue;
+      if (pick.magnetN > 0) {
+        const dx = player.x - c.x, dy = player.y - c.y, d = Math.hypot(dx, dy);
+        if (d < magnetRange() + player.r && d > 0) {
+          const mv = Math.min(d, 520 * dt);
+          c.x += dx / d * mv; c.y += dy / d * mv;
+        }
+      }
+      if (Math.hypot(c.x - player.x, c.y - player.y) < player.r + COIN.r + 4) {
+        coins.splice(i, 1);
+        shop.coins += c.v;
+        shop.coinFx = 1;
+      }
+    }
+    shop.coinFx = Math.max(0, shop.coinFx - dt * 3);
+    // 포탈에 들어가면 다음 스테이지
+    if (portal) {
+      portal.t += dt;
+      if (portal.t > 0.8 && Math.hypot(player.x - portal.x, player.y - portal.y) < portal.r + player.r * 0.3) {
+        trans.active = true; trans.t = 0; trans.switched = false;
       }
     }
     power.flash = Math.max(0, power.flash - dt * 2);
@@ -719,16 +1063,35 @@
 
   // ===== 그리기 =====
   function drawWorld() {
+    const th = stageTheme();
     // 바깥(세계 밖)
-    ctx.fillStyle = '#1b1f24';
+    ctx.fillStyle = th.outside;
     ctx.fillRect(0, 0, W, H);
 
     // 세계 바닥
-    ctx.fillStyle = '#3f5a3c';
+    ctx.fillStyle = th.ground;
     ctx.fillRect(-cam.x, -cam.y, WORLD.w, WORLD.h);
 
+    // 화산 지대: 용암 웅덩이 장식
+    if (th.lava) {
+      const now = performance.now() / 1000;
+      for (const l of LAVA) {
+        const sx = l.x - cam.x, sy = l.y - cam.y;
+        if (sx < -100 || sy < -100 || sx > W + 100 || sy > H + 100) continue;
+        const g = 0.5 + 0.5 * Math.sin(now * 1.6 + l.ph);
+        ctx.fillStyle = `rgba(255,110,40,${0.10 + 0.08 * g})`;
+        ctx.beginPath(); ctx.ellipse(sx, sy, l.rx + 14, l.ry + 12, l.rot, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#2a1410';
+        ctx.beginPath(); ctx.ellipse(sx, sy, l.rx + 4, l.ry + 4, l.rot, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = `rgb(${Math.round(220 + 35 * g)},${Math.round(90 + 40 * g)},30)`;
+        ctx.beginPath(); ctx.ellipse(sx, sy, l.rx, l.ry, l.rot, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = `rgba(255,220,120,${0.35 + 0.3 * g})`;
+        ctx.beginPath(); ctx.ellipse(sx - l.rx * 0.2, sy - l.ry * 0.2, l.rx * 0.45, l.ry * 0.4, l.rot, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
     // 움직임이 보이도록 옅은 격자
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.strokeStyle = th.grid;
     ctx.lineWidth = 1;
     const startX = Math.max(0, Math.floor(cam.x / TILE) * TILE);
     const endX = Math.min(WORLD.w, cam.x + W + TILE);
@@ -905,6 +1268,51 @@
     }
   }
 
+  function drawBlades() {
+    if (pick.bladeN <= 0) return;
+    const px = player.x - cam.x, py = player.y - cam.y;
+    ctx.strokeStyle = 'rgba(255,214,90,0.18)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px, py, BLADE.orbit, 0, Math.PI * 2); ctx.stroke();
+    for (let k = 0; k < pick.bladeN; k++) {
+      const a = pick.bladeA + k * Math.PI * 2 / pick.bladeN;
+      const bx = px + Math.cos(a) * BLADE.orbit, by = py + Math.sin(a) * BLADE.orbit;
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.rotate(pick.bladeA * 3 + k);
+      ctx.fillStyle = 'rgba(255,214,90,0.25)';
+      ctx.beginPath(); ctx.arc(0, 0, BLADE.r + 5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#f4f6fa'; ctx.strokeStyle = '#b8860b'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let q = 0; q < 8; q++) {
+        const rr = q % 2 === 0 ? BLADE.r + 2 : 4.5;
+        const qa = q * Math.PI / 4;
+        if (q === 0) ctx.moveTo(Math.cos(qa) * rr, Math.sin(qa) * rr); else ctx.lineTo(Math.cos(qa) * rr, Math.sin(qa) * rr);
+      }
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ffd24a';
+      ctx.beginPath(); ctx.arc(0, 0, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function drawBolts() {
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (const b of bolts) {
+      const a = 1 - b.t / 0.25;
+      for (const [w, c] of [[9, `rgba(140,180,255,${0.35 * a})`], [3.5, `rgba(220,235,255,${a})`]]) {
+        ctx.strokeStyle = c; ctx.lineWidth = w;
+        ctx.beginPath();
+        b.pts.forEach((p, i) => { const x = p.x - cam.x, y = p.y - cam.y; if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+        ctx.stroke();
+      }
+      const e = b.pts[b.pts.length - 1];
+      ctx.fillStyle = `rgba(200,225,255,${0.6 * a})`;
+      ctx.beginPath(); ctx.arc(e.x - cam.x, e.y - cam.y, 16 * a + 4, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.lineJoin = 'miter'; ctx.lineCap = 'butt';
+  }
+
   function drawEnemyShots() {
     for (const s of enemyShots) {
       const sx = s.x - cam.x, sy = s.y - cam.y;
@@ -998,8 +1406,9 @@
         ctx.strokeStyle = '#6a2410';
         ctx.lineWidth = 2;
       } else {
-        ctx.fillStyle = m.hit > 0 ? '#ffffff' : angry ? '#b0388f' : '#8e44ad';
-        ctx.strokeStyle = '#4a1f5c';
+        const mc = stageTheme().mon;
+        ctx.fillStyle = m.hit > 0 ? '#ffffff' : angry ? mc.angry : mc.fill;
+        ctx.strokeStyle = mc.stroke;
         ctx.lineWidth = 2;
       }
       ctx.beginPath();
@@ -1120,6 +1529,181 @@
     }
   }
 
+  function drawCoinIcon(x, y, r, spin) {
+    const sw = spin === undefined ? 1 : 0.25 + 0.75 * spin;
+    ctx.save();
+    ctx.translate(x, y); ctx.scale(sw, 1);
+    ctx.fillStyle = '#ffd24a'; ctx.strokeStyle = '#9a6a00'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = 'rgba(154,106,0,0.7)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(0, 0, r * 0.6, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.beginPath(); ctx.arc(-r * 0.35, -r * 0.35, r * 0.22, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawCoins() {
+    for (const c of coins) {
+      const sx = c.x - cam.x, sy = c.y - cam.y;
+      if (sx < -20 || sy < -20 || sx > W + 20 || sy > H + 20) continue;
+      const bob = Math.sin(c.t * 5 + c.ph) * 2;
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.beginPath(); ctx.ellipse(sx, sy + 7, 6, 2.6, 0, 0, Math.PI * 2); ctx.fill();
+      drawCoinIcon(sx, sy - 3 + bob, COIN.r, Math.abs(Math.cos(c.t * 3 + c.ph)));
+    }
+  }
+
+  function drawPortal() {
+    if (!portal) return;
+    const sx = portal.x - cam.x, sy = portal.y - cam.y, now = performance.now() / 1000;
+    if (sx > -90 && sy > -90 && sx < W + 90 && sy < H + 90) {
+      const R = portal.r * Math.min(1, portal.t / 0.8);
+      ctx.fillStyle = `rgba(120,200,255,${0.18 + 0.08 * Math.sin(now * 4)})`;
+      ctx.beginPath(); ctx.ellipse(sx, sy, R * 1.7, R * 1.3, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#1a1036';
+      ctx.beginPath(); ctx.ellipse(sx, sy, R, R * 0.75, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.save();
+      ctx.translate(sx, sy); ctx.scale(1, 0.75);
+      ctx.lineCap = 'round';
+      for (let k = 0; k < 3; k++) {
+        ctx.strokeStyle = k === 1 ? 'rgba(200,140,255,0.9)' : 'rgba(120,220,255,0.9)';
+        ctx.lineWidth = 3;
+        const a0 = now * (2 + k) + k * 2;
+        ctx.beginPath(); ctx.arc(0, 0, R * (0.3 + k * 0.22), a0, a0 + Math.PI * 1.2); ctx.stroke();
+      }
+      ctx.restore();
+      ctx.strokeStyle = 'rgba(180,230,255,0.95)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.ellipse(sx, sy, R, R * 0.75, 0, 0, Math.PI * 2); ctx.stroke();
+      const label = '다음 스테이지 ▶';
+      ctx.font = 'bold 14px system-ui, -apple-system, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+      ctx.strokeText(label, sx, sy - R - 18);
+      ctx.fillStyle = '#9fe0ff';
+      ctx.fillText(label, sx, sy - R - 18);
+    }
+    if (sx < 20 || sy < 20 || sx > W - 20 || sy > H - 20) {
+      // 화면 밖에 있으면 가장자리에 포탈 방향 화살표
+      const a = Math.atan2(portal.y - player.y, portal.x - player.x);
+      const ca = Math.cos(a), sa = Math.sin(a), m = 40;
+      const t = Math.min((W / 2 - m) / Math.max(1e-6, Math.abs(ca)), (H / 2 - m) / Math.max(1e-6, Math.abs(sa)));
+      const ax = W / 2 + ca * t, ay = H / 2 + sa * t;
+      ctx.save();
+      ctx.translate(ax, ay); ctx.rotate(a);
+      ctx.fillStyle = `rgba(150,220,255,${0.75 + 0.25 * Math.sin(now * 6)})`;
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(16, 0); ctx.lineTo(-10, -12); ctx.lineTo(-4, 0); ctx.lineTo(-10, 12); ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.restore();
+      ctx.font = 'bold 12px system-ui, -apple-system, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+      ctx.strokeText('포탈', ax - ca * 26, ay - sa * 26);
+      ctx.fillStyle = '#9fe0ff';
+      ctx.fillText('포탈', ax - ca * 26, ay - sa * 26);
+    }
+  }
+
+  function drawShop() {
+    if (!shop.open) return;
+    ctx.fillStyle = 'rgba(0,0,0,0.66)';
+    ctx.fillRect(0, 0, W, H);
+    const rs = pickCardRects();
+    const y0 = rs[0].y;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+    ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+    ctx.strokeText('코인 강화', W / 2, y0 - 80);
+    ctx.fillStyle = '#ffd24a';
+    ctx.fillText('코인 강화', W / 2, y0 - 80);
+    // 가진 코인
+    const line = '가진 코인 ' + shop.coins;
+    ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
+    const lw = ctx.measureText(line).width;
+    const lx = W / 2 - (lw + 24) / 2;
+    drawCoinIcon(lx + 9, y0 - 48, 9);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(line, lx + 24, y0 - 47);
+    ctx.textAlign = 'center';
+    ctx.font = '13px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.fillText('눌러서 강화하세요 (키보드 1 · 2 · 3)', W / 2, y0 - 20);
+    for (let i = 0; i < 3; i++) {
+      const it = SHOP_ITEMS[i], r = rs[i], on = shop.sel === i;
+      const cost = shopCost(i), maxed = it.can && !it.can(), afford = !maxed && shop.coins >= cost;
+      const x = r.x + Math.sin(shop.shake[i] * 40) * 6 * shop.shake[i];
+      ctx.fillStyle = on ? 'rgba(' + it.color + ',0.28)' : 'rgba(30,34,40,0.92)';
+      ctx.fillRect(x, r.y, r.w, r.h);
+      if (shop.fx[i] > 0) {
+        ctx.fillStyle = `rgba(255,255,255,${0.45 * shop.fx[i]})`;
+        ctx.fillRect(x, r.y, r.w, r.h);
+      }
+      ctx.strokeStyle = 'rgb(' + it.color + ')';
+      ctx.lineWidth = on ? 4 : 2;
+      ctx.strokeRect(x, r.y, r.w, r.h);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = 'rgb(' + it.color + ')';
+      ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
+      ctx.fillText(String(i + 1), x + 12, r.y + 16);
+      ctx.font = 'bold 20px system-ui, -apple-system, sans-serif';
+      ctx.fillText(it.title + '  +' + shop.lv[i], x + 30, r.y + r.h / 2 - 11);
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      const d = it.desc();
+      fitText(d, r.w - 42, 13, false);
+      ctx.fillText(d, x + 30, r.y + r.h / 2 + 15);
+      // 가격
+      ctx.textAlign = 'right';
+      ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
+      if (maxed) {
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.fillText('최대', x + r.w - 12, r.y + 20);
+      } else {
+        const ct = String(cost);
+        ctx.fillStyle = afford ? '#ffd24a' : '#ff7a6a';
+        ctx.fillText(ct, x + r.w - 12, r.y + 20);
+        drawCoinIcon(x + r.w - 22 - ctx.measureText(ct).width, r.y + 19, 7);
+      }
+    }
+    const last = rs[2];
+    ctx.textAlign = 'center';
+    if (shop.msgT > 0) {
+      ctx.globalAlpha = Math.min(1, shop.msgT / 0.3);
+      ctx.font = 'bold 15px system-ui, -apple-system, sans-serif';
+      ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+      ctx.strokeText(shop.msg, W / 2, last.y + last.h + 22);
+      ctx.fillStyle = 'rgb(' + shop.msgColor + ')';
+      ctx.fillText(shop.msg, W / 2, last.y + last.h + 22);
+      ctx.globalAlpha = 1;
+    }
+    const cb = shopCloseRect();
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fillRect(cb.x, cb.y, cb.w, cb.h);
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 2;
+    ctx.strokeRect(cb.x, cb.y, cb.w, cb.h);
+    ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('닫기 (E)', W / 2, cb.y + cb.h / 2 + 1);
+  }
+
+  function drawTrans() {
+    if (!trans.active) return;
+    const a = trans.t < TRANS_HALF ? trans.t / TRANS_HALF : Math.max(0, 1 - (trans.t - TRANS_HALF) / (TRANS_HALF * 1.2));
+    ctx.fillStyle = `rgba(8,6,20,${a})`;
+    ctx.fillRect(0, 0, W, H);
+    if (trans.switched) {
+      ctx.globalAlpha = a;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = 'bold 34px system-ui, -apple-system, sans-serif';
+      ctx.fillStyle = 'rgb(' + stageTheme().color + ')';
+      ctx.fillText('스테이지 ' + stage.n, W / 2, H / 2 - 10);
+      ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(stageTheme().name, W / 2, H / 2 + 26);
+      ctx.globalAlpha = 1;
+    }
+  }
+
   function drawFloats() {
     ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
     ctx.textAlign = 'center';
@@ -1172,6 +1756,40 @@
     ctx.fillRect(x, wy, ww + 24, 26);
     ctx.fillStyle = `rgb(${w.color})`;
     ctx.fillText(wtext, x + 12, wy + 14);
+
+    // 코인 (오른쪽 위)
+    const ct = String(shop.coins);
+    ctx.font = `bold ${17 + shop.coinFx * 5}px system-ui, -apple-system, sans-serif`;
+    ctx.textAlign = 'right';
+    const cbw = ctx.measureText(ct).width + 46, cby = safeTop + 12;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(W - 12 - cbw, cby, cbw, 34);
+    drawCoinIcon(W - 12 - cbw + 18, cby + 17, 9);
+    ctx.fillStyle = shop.coinFx > 0 ? '#ffd65a' : '#ffffff';
+    ctx.fillText(ct, W - 24, cby + 18);
+    // 강화 버튼
+    const sb = shopBtnRect(), ready = canBuyAny();
+    if (ready) {
+      ctx.fillStyle = `rgba(255,214,90,${0.25 + 0.2 * Math.sin(performance.now() / 180)})`;
+      ctx.fillRect(sb.x - 4, sb.y - 4, sb.w + 8, sb.h + 8);
+    }
+    ctx.fillStyle = ready ? 'rgba(255,190,60,0.92)' : 'rgba(120,100,60,0.7)';
+    ctx.fillRect(sb.x, sb.y, sb.w, sb.h);
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 2;
+    ctx.strokeRect(sb.x, sb.y, sb.w, sb.h);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 15px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = ready ? '#3a2400' : 'rgba(255,255,255,0.85)';
+    ctx.fillText('강화 (E)', sb.x + sb.w / 2, sb.y + sb.h / 2 + 1);
+    // 스테이지 (왼쪽, 무기 아래)
+    const th = stageTheme(), stx = '스테이지 ' + stage.n + ' · ' + th.name;
+    ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'left';
+    const sw = ctx.measureText(stx).width + 24, sty = wy + 26 + 4;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(x, sty, sw, 22);
+    ctx.fillStyle = 'rgb(' + th.color + ')';
+    ctx.fillText(stx, x + 12, sty + 12);
   }
 
   function drawBullets() {
@@ -1245,11 +1863,15 @@
   function render() {
     drawWorld();
     drawItems();
+    drawCoins();
+    drawPortal();
     drawBossTelegraphs();
     drawHitboxes();
     drawMonsters();
     drawBullets();
     drawEnemyShots();
+    drawBolts();
+    drawBlades();
     drawPlayer();
     drawFloats();
     drawBanner();
@@ -1257,31 +1879,92 @@
     drawFireBtn();
     drawHud();
     drawPick();
+    drawShop();
+    drawTrans();
+  }
+
+  function fitText(text, maxW, size, bold) {
+    let sz = size;
+    do { ctx.font = (bold ? 'bold ' : '') + sz + 'px system-ui, -apple-system, sans-serif'; sz--; }
+    while (ctx.measureText(text).width > maxW && sz > 9);
   }
 
   function drawPick() {
     if (!pick.open) return;
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    const jp = pick.jackpot;
+    const now = performance.now() / 1000;
+    ctx.fillStyle = jp ? 'rgba(10,6,0,0.72)' : 'rgba(0,0,0,0.6)';
     ctx.fillRect(0, 0, W, H);
     const rs = pickCardRects();
+    if (jp) {
+      // 잭팟: 돌아가는 금빛 줄기 + 반짝이
+      const cx = W / 2, cy = rs[0].y - 40, L = Math.max(W, H) * 1.2;
+      ctx.save();
+      ctx.translate(cx, cy); ctx.rotate(now * 0.5);
+      ctx.fillStyle = 'rgba(255,200,60,0.10)';
+      for (let i = 0; i < 14; i++) {
+        ctx.rotate(Math.PI * 2 / 14);
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-L * 0.12, -L); ctx.lineTo(L * 0.12, -L); ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+      for (let i = 0; i < 26; i++) {
+        const hx = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1, hy = Math.abs(Math.sin(i * 78.233) * 12345.678) % 1;
+        const tw = 0.5 + 0.5 * Math.sin(now * 5 + i * 1.7);
+        const x = hx * W, y = hy * H, r = 2 + tw * 4;
+        ctx.fillStyle = `rgba(255,230,140,${0.25 + 0.6 * tw})`;
+        ctx.beginPath();
+        ctx.moveTo(x, y - r * 2); ctx.lineTo(x + r * 0.5, y - r * 0.5); ctx.lineTo(x + r * 2, y);
+        ctx.lineTo(x + r * 0.5, y + r * 0.5); ctx.lineTo(x, y + r * 2); ctx.lineTo(x - r * 0.5, y + r * 0.5);
+        ctx.lineTo(x - r * 2, y); ctx.lineTo(x - r * 0.5, y - r * 0.5); ctx.closePath(); ctx.fill();
+      }
+    }
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
-    ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-    ctx.strokeText('강화 선택!', W / 2, rs[0].y - 44);
-    ctx.fillStyle = '#ffd65a';
-    ctx.fillText('강화 선택!', W / 2, rs[0].y - 44);
-    ctx.font = '13px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.75)';
-    ctx.fillText('하나를 눌러서 고르세요 (키보드 1 · 2 · 3)', W / 2, rs[0].y - 18);
-    const ready = pick.openT >= 0.35;
-    for (let i = 0; i < 3; i++) {
-      const r = rs[i], o = PICK_OPTIONS[i], on = pick.sel === i;
+    if (jp) {
+      const pulse = 1 + 0.08 * Math.sin(now * 8) + Math.max(0, 0.5 - pick.openT) * 0.8;
+      ctx.save();
+      ctx.translate(W / 2, rs[0].y - 50); ctx.scale(pulse, pulse);
+      ctx.font = 'bold 36px system-ui, -apple-system, sans-serif';
+      ctx.lineWidth = 7; ctx.strokeStyle = 'rgba(80,40,0,0.9)';
+      ctx.strokeText('★ 잭팟! ★', 0, 0);
+      ctx.shadowColor = 'rgba(255,200,60,0.9)'; ctx.shadowBlur = 18;
+      ctx.fillStyle = '#ffd24a';
+      ctx.fillText('★ 잭팟! ★', 0, 0);
+      ctx.restore();
+      ctx.font = '13px system-ui, -apple-system, sans-serif';
+      ctx.fillStyle = 'rgba(255,240,200,0.9)';
+      ctx.fillText('좋은 능력 하나를 고르세요 (키보드 1 · 2 · 3)', W / 2, rs[0].y - 18);
+    } else {
+      ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
+      ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+      ctx.strokeText('강화 선택!', W / 2, rs[0].y - 44);
+      ctx.fillStyle = '#ffd65a';
+      ctx.fillText('강화 선택!', W / 2, rs[0].y - 44);
+      ctx.font = '13px system-ui, -apple-system, sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillText('하나를 눌러서 고르세요 (키보드 1 · 2 · 3)', W / 2, rs[0].y - 18);
+    }
+    const ready = pick.openT >= pickReadyT();
+    for (let i = 0; i < pick.cards.length; i++) {
+      const r = rs[i], o = pick.cards[i], on = pick.sel === i;
       ctx.globalAlpha = ready ? 1 : 0.6;
-      ctx.fillStyle = on ? 'rgba(' + o.color + ',0.28)' : 'rgba(30,34,40,0.92)';
+      ctx.fillStyle = on ? 'rgba(' + o.color + ',0.28)' : jp ? 'rgba(58,42,8,0.95)' : 'rgba(30,34,40,0.92)';
       ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = 'rgb(' + o.color + ')';
-      ctx.lineWidth = on ? 4 : 2;
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      if (jp) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(255,200,60,0.9)'; ctx.shadowBlur = 10 + 6 * Math.sin(now * 6 + i);
+        ctx.strokeStyle = '#ffd24a';
+        ctx.lineWidth = on ? 5 : 3;
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+        ctx.restore();
+        ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#ffd24a';
+        ctx.fillText('잭팟', r.x + r.w - 10, r.y + 14);
+      } else {
+        ctx.strokeStyle = 'rgb(' + o.color + ')';
+        ctx.lineWidth = on ? 4 : 2;
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+      }
       ctx.textAlign = 'left';
       ctx.fillStyle = 'rgb(' + o.color + ')';
       ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
@@ -1289,10 +1972,16 @@
       ctx.font = 'bold 20px system-ui, -apple-system, sans-serif';
       ctx.fillText(o.title, r.x + 30, r.y + r.h / 2 - 11);
       ctx.fillStyle = 'rgba(255,255,255,0.85)';
-      ctx.font = '13px system-ui, -apple-system, sans-serif';
-      ctx.fillText(o.desc(), r.x + 30, r.y + r.h / 2 + 15);
+      const d = o.desc();
+      fitText(d, r.w - 42, 13, false);
+      ctx.fillText(d, r.x + 30, r.y + r.h / 2 + 15);
     }
     ctx.globalAlpha = 1;
+    // 잭팟이 뜬 순간 번쩍
+    if (jp && pick.openT < 0.4) {
+      ctx.fillStyle = `rgba(255,236,170,${(0.4 - pick.openT) / 0.4 * 0.7})`;
+      ctx.fillRect(0, 0, W, H);
+    }
     ctx.textAlign = 'center';
   }
 
@@ -1301,7 +1990,10 @@
   function loop(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    if (pick.open) pick.openT += dt; else update(dt);
+    if (trans.active) updateTrans(dt);
+    else if (pick.open) pick.openT += dt;
+    else if (shop.open) updateShopUi(dt);
+    else update(dt);
     render();
     requestAnimationFrame(loop);
   }
