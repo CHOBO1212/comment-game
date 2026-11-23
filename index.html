@@ -53,6 +53,36 @@
     kbx: 0, kby: 0   // 맞았을 때 밀려남
   };
 
+  // ===== 대쉬 (회피) — 짧게 빠르게 미끄러지고, 그동안 잠깐 무적 =====
+  const DASH = {
+    dist: 170,       // 미끄러지는 거리 (픽셀)
+    dur: 0.2,        // 미끄러지는 시간 (초)
+    inv: 0.3,        // 무적 시간 (초) — 미끄러진 직후까지 조금 더
+    cooldown: 1.0,   // 다시 쓸 수 있을 때까지 (초)
+    btnR: 30
+  };
+  DASH.speed = DASH.dist / DASH.dur;
+  const dash = { t: 0, inv: 0, cd: 0, dx: 0, dy: 1, ghostT: 0, dodged: false };
+  const dashGhosts = [];   // 잔상
+  function tryDash() {
+    if (trans.active || pick.open || shop.open || gacha.open) return;
+    if (dash.cd > 0 || dash.t > 0) return;
+    // 움직이는 중이면 그 방향, 가만히 있으면 바라보는 방향으로
+    const inp = getInput(), mag = Math.hypot(inp.x, inp.y);
+    let dx = player.dirX, dy = player.dirY;
+    if (mag > 0.05) { dx = inp.x / mag; dy = inp.y / mag; }
+    dash.dx = dx; dash.dy = dy;
+    player.dirX = dx; player.dirY = dy;
+    dash.t = DASH.dur; dash.inv = DASH.inv; dash.cd = DASH.cooldown;
+    dash.ghostT = 0; dash.dodged = false;
+    player.kbx = player.kby = 0;
+  }
+  function showDodge() {
+    if (dash.dodged) return;   // 대쉬 한 번에 한 번만 표시
+    dash.dodged = true;
+    floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '회피!', color: '140,225,255' });
+  }
+
   // ===== 총 =====
   const gun = { cooldown: 0, rate: 0.18, bulletSpeed: 720, bulletLife: 0.75, recoil: 0 };
   const bullets = [];
@@ -147,6 +177,7 @@
   }
   const SPAWN = { x: WORLD.w / 2, y: WORLD.h / 2 };
   function hurtPlayer(dmg, fromX, fromY) {
+    if (dash.inv > 0) { showDodge(); return; }   // 대쉬 무적: 공격을 피함
     if (player.invuln > 0) return;
     dmg = Math.ceil(dmg * stageGrow(STAGE.dmgGrow));   // 스테이지가 오를수록 아프게
     player.hp = Math.max(0, player.hp - dmg);
@@ -610,6 +641,7 @@
     respawnQueue = [];
     portal = null; bossRespawn = 0; finalSpawned = false; gameTime = 0;
     player.x = SPAWN.x; player.y = SPAWN.y; player.kbx = player.kby = 0; player.invuln = 1.5;
+    dash.t = 0; dashGhosts.length = 0;
     for (let i = 0; i < MONSTER_COUNT; i++) spawnMonster();
     spawnBoss();
     const th = stageTheme();
@@ -726,6 +758,9 @@
     }
     if (isShopKey && !e.repeat) { openShop(); e.preventDefault(); return; }
     if (isGachaKey && !e.repeat) { openGacha(); e.preventDefault(); return; }
+    const isDashKey = e.code === 'ShiftLeft' || e.code === 'ShiftRight' || e.key === 'Shift' ||
+      e.code === 'KeyK' || e.key === 'k' || e.key === 'K' || e.key === 'ㅏ';
+    if (isDashKey) { if (!e.repeat) tryDash(); e.preventDefault(); return; }
     const k = keyOf(e);
     if (k) { keys[k] = true; e.preventDefault(); }
   }, true);
@@ -773,6 +808,15 @@
     const p = fireBtnPos();
     return Math.hypot(x - p.x, y - p.y) <= fireBtn.r + 14;
   }
+  // ===== 대쉬 버튼 (발사 버튼 왼쪽 위) =====
+  function dashBtnPos() {
+    const p = fireBtnPos();
+    return { x: p.x - 80, y: p.y - 64 };
+  }
+  function onDashBtn(x, y) {
+    const p = dashBtnPos();
+    return Math.hypot(x - p.x, y - p.y) <= DASH.btnR + 10;
+  }
 
   canvas.addEventListener('pointerdown', e => {
     if (pick.open) {
@@ -809,6 +853,11 @@
     }
     if (inRect(e.clientX, e.clientY, gachaBtnRect())) {
       openGacha();
+      e.preventDefault();
+      return;
+    }
+    if (onDashBtn(e.clientX, e.clientY)) {
+      tryDash();
       e.preventDefault();
       return;
     }
@@ -866,7 +915,17 @@
     const mag = Math.hypot(inp.x, inp.y);
     player.moving = mag > 0.05;
 
-    if (player.moving) {
+    // 대쉬(회피): 미끄러지는 동안은 정해진 방향으로 빠르게 이동
+    dash.cd = Math.max(0, dash.cd - dt);
+    dash.inv = Math.max(0, dash.inv - dt);
+    if (dash.t > 0) {
+      const st = Math.min(dt, dash.t);
+      player.x += dash.dx * DASH.speed * st;
+      player.y += dash.dy * DASH.speed * st;
+      dash.t -= dt;
+      dash.ghostT -= dt;
+      if (dash.ghostT <= 0) { dash.ghostT = 0.03; dashGhosts.push({ x: player.x, y: player.y, t: 0 }); }
+    } else if (player.moving) {
       player.x += inp.x * player.speed * dt;
       player.y += inp.y * player.speed * dt;
       player.dirX = inp.x / mag;
@@ -874,6 +933,10 @@
       player.walkTime += dt * (6 + 6 * mag);
     } else {
       player.walkTime = 0;
+    }
+    for (let i = dashGhosts.length - 1; i >= 0; i--) {
+      dashGhosts[i].t += dt;
+      if (dashGhosts[i].t > 0.25) dashGhosts.splice(i, 1);
     }
 
     // 맞았을 때 밀려남 / 무적 시간
@@ -1103,8 +1166,11 @@
       s.x += s.vx * dt; s.y += s.vy * dt; s.life -= dt;
       let gone = s.life <= 0 || s.x < 0 || s.y < 0 || s.x > WORLD.w || s.y > WORLD.h;
       if (!gone && Math.hypot(s.x - player.x, s.y - player.y) < s.r + player.r) {
-        hurtPlayer(s.dmg, s.x - s.vx, s.y - s.vy);
-        gone = true;
+        if (dash.inv > 0) showDodge();   // 대쉬 무적: 탄이 몸을 통과함
+        else {
+          hurtPlayer(s.dmg, s.x - s.vx, s.y - s.vy);
+          gone = true;
+        }
       }
       if (gone) enemyShots.splice(i, 1);
     }
@@ -1245,6 +1311,14 @@
     ctx.ellipse(sx, sy + player.r * 0.7, player.r * 0.95, player.r * 0.45, 0, 0, Math.PI * 2);
     ctx.fill();
 
+    // 대쉬 무적 중: 몸 주위 하늘색 빛
+    if (dash.inv > 0) {
+      ctx.fillStyle = `rgba(140,225,255,${0.3 + 0.15 * Math.sin(performance.now() / 40)})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy - bob, player.r + 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     // 발 (걷는 모션)
     const step = player.moving ? Math.sin(player.walkTime) * 5 : 0;
     const px = -player.dirY, py = player.dirX; // 진행 방향의 수직
@@ -1340,6 +1414,16 @@
       ctx.fill();
     }
     ctx.globalAlpha = 1;
+  }
+
+  function drawDashGhosts() {
+    for (const g of dashGhosts) {
+      const k = g.t / 0.25;
+      ctx.fillStyle = `rgba(140,225,255,${0.4 * (1 - k)})`;
+      ctx.beginPath();
+      ctx.arc(g.x - cam.x, g.y - cam.y, player.r * (1 - 0.2 * k), 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   function drawBossTelegraphs() {
@@ -2186,6 +2270,45 @@
     ctx.stroke();
   }
 
+  function drawDashBtn() {
+    if (pick.open || shop.open || gacha.open) return;   // 메뉴가 열려 있으면 숨김 (그동안은 쓸 수 없음)
+    const p = dashBtnPos(), r = DASH.btnR;
+    const ready = dash.cd <= 0;
+    ctx.fillStyle = dash.t > 0 ? 'rgba(140,225,255,0.6)' : ready ? 'rgba(80,190,255,0.32)' : 'rgba(60,70,85,0.45)';
+    ctx.strokeStyle = ready ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    // 다시 쓸 수 있을 때까지 남은 시간
+    if (!ready) {
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.arc(p.x, p.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (dash.cd / DASH.cooldown));
+      ctx.closePath();
+      ctx.fill();
+    }
+    // » 모양
+    ctx.strokeStyle = ready ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (const ox of [-7, 3]) {
+      ctx.moveTo(p.x + ox - 3, p.y - 14); ctx.lineTo(p.x + ox + 4, p.y - 7); ctx.lineTo(p.x + ox - 3, p.y);
+    }
+    ctx.stroke();
+    ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = 'bold 12px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = ready ? '#ffffff' : 'rgba(255,255,255,0.6)';
+    ctx.fillText('대쉬', p.x, p.y + 12);
+    ctx.font = '10px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText('Shift / K', p.x, p.y + r + 10);
+  }
+
   function drawStick() {
     if (!stick.active) return;
     let dx = stick.x - stick.ox;
@@ -2219,11 +2342,13 @@
     drawEnemyShots();
     drawBolts();
     drawBlades();
+    drawDashGhosts();
     drawPlayer();
     drawFloats();
     drawBanner();
     drawStick();
     drawFireBtn();
+    drawDashBtn();
     drawHud();
     drawPick();
     drawShop();
