@@ -53,36 +53,6 @@
     kbx: 0, kby: 0   // 맞았을 때 밀려남
   };
 
-  // ===== 대쉬 (회피) — 짧게 빠르게 미끄러지고, 그동안 잠깐 무적 =====
-  const DASH = {
-    dist: 170,       // 미끄러지는 거리 (픽셀)
-    dur: 0.2,        // 미끄러지는 시간 (초)
-    inv: 0.3,        // 무적 시간 (초) — 미끄러진 직후까지 조금 더
-    cooldown: 1.0,   // 다시 쓸 수 있을 때까지 (초)
-    btnR: 30
-  };
-  DASH.speed = DASH.dist / DASH.dur;
-  const dash = { t: 0, inv: 0, cd: 0, dx: 0, dy: 1, ghostT: 0, dodged: false };
-  const dashGhosts = [];   // 잔상
-  function tryDash() {
-    if (trans.active || pick.open || shop.open || gacha.open) return;
-    if (dash.cd > 0 || dash.t > 0) return;
-    // 움직이는 중이면 그 방향, 가만히 있으면 바라보는 방향으로
-    const inp = getInput(), mag = Math.hypot(inp.x, inp.y);
-    let dx = player.dirX, dy = player.dirY;
-    if (mag > 0.05) { dx = inp.x / mag; dy = inp.y / mag; }
-    dash.dx = dx; dash.dy = dy;
-    player.dirX = dx; player.dirY = dy;
-    dash.t = DASH.dur; dash.inv = DASH.inv; dash.cd = DASH.cooldown;
-    dash.ghostT = 0; dash.dodged = false;
-    player.kbx = player.kby = 0;
-  }
-  function showDodge() {
-    if (dash.dodged) return;   // 대쉬 한 번에 한 번만 표시
-    dash.dodged = true;
-    floats.push({ x: player.x, y: player.y - player.r - 12, t: 0, text: '회피!', color: '140,225,255' });
-  }
-
   // ===== 총 =====
   const gun = { cooldown: 0, rate: 0.18, bulletSpeed: 720, bulletLife: 0.75, recoil: 0 };
   const bullets = [];
@@ -101,10 +71,6 @@
   function tryUpgradeWeapon() {
     if (weapon.tier >= WEAPONS.length - 1) return;
     if (Math.random() >= WEAPON_UPGRADE_CHANCE) return;
-    upgradeWeapon();
-  }
-  function upgradeWeapon() {
-    if (weapon.tier >= WEAPONS.length - 1) return;
     weapon.tier++;
     weapon.fx = 1;
     const w = curWeapon();
@@ -177,7 +143,6 @@
   }
   const SPAWN = { x: WORLD.w / 2, y: WORLD.h / 2 };
   function hurtPlayer(dmg, fromX, fromY) {
-    if (dash.inv > 0) { showDodge(); return; }   // 대쉬 무적: 공격을 피함
     if (player.invuln > 0) return;
     dmg = Math.ceil(dmg * stageGrow(STAGE.dmgGrow));   // 스테이지가 오를수록 아프게
     player.hp = Math.max(0, player.hp - dmg);
@@ -536,97 +501,6 @@
     }
   }
 
-  // ===== 아이템 뽑기 (코인을 내고 무작위 아이템 하나) =====
-  const GACHA = {
-    cost: 10,      // 한 번 뽑는 데 드는 코인
-    legend: 0.1,   // 전설 10% — 잭팟 능력 중 하나
-    rare: 0.3,     // 희귀 30% — 평소 능력 또는 무기 업그레이드 중 하나
-                   // 나머지 60%는 일반 — 공격력 아이템 (몬스터가 떨어뜨리는 것과 같음, 공격력 ×2)
-    roll: 1.2      // 뽑는 연출 시간 (초)
-  };
-  const RARITY = [
-    { name: '일반', stars: '★', color: '200,210,225' },
-    { name: '희귀', stars: '★★', color: '110,190,255' },
-    { name: '전설', stars: '★★★', color: '255,210,80' }
-  ];
-  const gacha = { open: false, openT: 0, state: 'idle', rt: 0, tick: 0, name: '', spin: 0, knob: 0, prize: null, fx: 0, shake: 0, msg: '', msgColor: '255,255,255', msgT: 0, count: 0 };
-  function gachaPool(rar) {
-    const avail = o => !o.can || o.can();
-    if (rar === 2) return JACKPOT_OPTIONS.filter(avail).map(o => ({ rar: 2, title: o.title, desc: o.desc(), color: o.color, apply: () => o.apply() }));
-    if (rar === 1) {
-      const pool = PICK_OPTIONS.filter(avail).map(o => ({ rar: 1, title: o.title, desc: o.desc(), color: o.color, apply: () => o.apply() }));
-      if (weapon.tier < WEAPONS.length - 1) {
-        const nw = WEAPONS[weapon.tier + 1];
-        pool.push({ rar: 1, title: '무기 업그레이드', desc: curWeapon().name + ' → ' + nw.name, color: nw.color, apply: upgradeWeapon });
-      }
-      return pool;
-    }
-    return [{ rar: 0, title: '공격력 아이템', desc: '공격력 ×2  (' + fmtPower(playerDmg()) + ' → ' + fmtPower(playerDmg() * 2) + ')', color: '255,120,90',
-      apply() { const t = weapon.tier; eatItem(); if (weapon.tier > t) this.bonus = '보너스! 무기 업그레이드 → ' + curWeapon().name; } }];
-  }
-  function rollGachaPrize() {
-    const r = Math.random();
-    let rar = r < GACHA.legend ? 2 : r < GACHA.legend + GACHA.rare ? 1 : 0;
-    let pool = gachaPool(rar);
-    while (!pool.length && rar > 0) pool = gachaPool(--rar);
-    return pool[Math.floor(Math.random() * pool.length)];
-  }
-  let GACHA_NAMES = null;
-  function gachaRandomName() {
-    if (!GACHA_NAMES) GACHA_NAMES = ['공격력 아이템', '무기 업그레이드'].concat(PICK_OPTIONS.map(o => o.title), JACKPOT_OPTIONS.map(o => o.title));
-    let n;
-    do { n = GACHA_NAMES[Math.floor(Math.random() * GACHA_NAMES.length)]; } while (n === gacha.name);
-    return n;
-  }
-  function gachaMsg(text, color) { gacha.msg = text; gacha.msgColor = color; gacha.msgT = 1.6; }
-  function openGacha() {
-    if (gacha.open || shop.open || pick.open || trans.active) return;
-    gacha.open = true; gacha.openT = 0; gacha.state = 'idle'; gacha.prize = null; gacha.msgT = 0; gacha.fx = 0;
-    for (const k in keys) keys[k] = false;
-    stickEnd();
-    fireBtn.pressed = false; fireBtn.id = null;
-  }
-  function closeGacha() { if (gacha.state !== 'roll') gacha.open = false; }   // 뽑는 중에는 닫히지 않음
-  function pullGacha() {
-    if (!gacha.open || gacha.state === 'roll') return;
-    if (shop.coins < GACHA.cost) { gachaMsg('코인이 부족해요 (' + (GACHA.cost - shop.coins) + '개 더 필요)', '255,110,100'); gacha.shake = 1; return; }
-    shop.coins -= GACHA.cost;
-    gacha.prize = rollGachaPrize();
-    gacha.state = 'roll'; gacha.rt = 0; gacha.tick = 0; gacha.msgT = 0; gacha.fx = 0;
-  }
-  function updateGachaUi(dt) {
-    gacha.openT += dt;
-    gacha.msgT = Math.max(0, gacha.msgT - dt);
-    gacha.shake = Math.max(0, gacha.shake - dt * 3);
-    gacha.fx = Math.max(0, gacha.fx - dt * 1.2);
-    if (gacha.state !== 'roll') return;
-    gacha.rt += dt;
-    const k = Math.min(1, gacha.rt / GACHA.roll);
-    gacha.spin += dt * (14 * (1 - k) + 1);
-    gacha.knob += dt * 9 * (1 - k * 0.6);
-    gacha.tick -= dt;
-    if (gacha.tick <= 0) { gacha.tick = 0.05 + 0.15 * k * k; gacha.name = gachaRandomName(); }
-    if (gacha.rt >= GACHA.roll) {
-      gacha.state = 'show'; gacha.fx = 1; gacha.count++;
-      gacha.prize.apply();
-    }
-  }
-  function gachaBtnRect() { const s = shopBtnRect(); return { x: s.x, y: s.y + s.h + 6, w: s.w, h: s.h }; }
-  function gachaLayout() {
-    const top = Math.max(safeTop + 70, H / 2 - 285);
-    const cx = W / 2, cw = Math.min(W - 40, 340);
-    return {
-      cx, top,
-      titleY: top + 14, coinY: top + 46, rateY: top + 70,
-      domeY: top + 160, domeR: 70,
-      bodyY: top + 214, bodyW: 180, bodyH: 96,
-      card: { x: cx - cw / 2, y: top + 322, w: cw, h: 100 },
-      msgY: top + 444,
-      drawBtn: { x: cx - 120, y: top + 466, w: 240, h: 52 },
-      closeBtn: { x: cx - 80, y: top + 530, w: 160, h: 42 }
-    };
-  }
-
   // ===== 포탈 → 다음 스테이지 =====
   function openPortal(x, y) {
     portal = { x: Math.max(80, Math.min(WORLD.w - 80, x)), y: Math.max(80, Math.min(WORLD.h - 80, y)), r: 34, t: 0 };
@@ -641,7 +515,6 @@
     respawnQueue = [];
     portal = null; bossRespawn = 0; finalSpawned = false; gameTime = 0;
     player.x = SPAWN.x; player.y = SPAWN.y; player.kbx = player.kby = 0; player.invuln = 1.5;
-    dash.t = 0; dashGhosts.length = 0;
     for (let i = 0; i < MONSTER_COUNT; i++) spawnMonster();
     spawnBoss();
     const th = stageTheme();
@@ -735,7 +608,6 @@
       return;
     }
     const isShopKey = e.code === 'KeyE' || e.key === 'e' || e.key === 'E' || e.key === 'ㄷ';
-    const isGachaKey = e.code === 'KeyG' || e.key === 'g' || e.key === 'G' || e.key === 'ㅎ';
     if (shop.open) {
       // 코인 강화: 1/2/3 바로 강화, 위아래로 고르고 Enter/Space로 강화, E/Esc로 닫기
       const n = { Digit1: 0, Digit2: 1, Digit3: 2, Numpad1: 0, Numpad2: 1, Numpad3: 2 }[e.code] ?? { '1': 0, '2': 1, '3': 2 }[e.key];
@@ -748,19 +620,7 @@
       e.preventDefault();
       return;
     }
-    if (gacha.open) {
-      // 아이템 뽑기: Space/Enter로 뽑기, G/Esc로 닫기
-      const k = keyOf(e);
-      if (!e.repeat && (k === 'fire' || e.key === 'Enter')) pullGacha();
-      else if (!e.repeat && (isGachaKey || e.key === 'Escape')) closeGacha();
-      e.preventDefault();
-      return;
-    }
     if (isShopKey && !e.repeat) { openShop(); e.preventDefault(); return; }
-    if (isGachaKey && !e.repeat) { openGacha(); e.preventDefault(); return; }
-    const isDashKey = e.code === 'ShiftLeft' || e.code === 'ShiftRight' || e.key === 'Shift' ||
-      e.code === 'KeyK' || e.key === 'k' || e.key === 'K' || e.key === 'ㅏ';
-    if (isDashKey) { if (!e.repeat) tryDash(); e.preventDefault(); return; }
     const k = keyOf(e);
     if (k) { keys[k] = true; e.preventDefault(); }
   }, true);
@@ -808,15 +668,6 @@
     const p = fireBtnPos();
     return Math.hypot(x - p.x, y - p.y) <= fireBtn.r + 14;
   }
-  // ===== 대쉬 버튼 (발사 버튼 왼쪽 위) =====
-  function dashBtnPos() {
-    const p = fireBtnPos();
-    return { x: p.x - 80, y: p.y - 64 };
-  }
-  function onDashBtn(x, y) {
-    const p = dashBtnPos();
-    return Math.hypot(x - p.x, y - p.y) <= DASH.btnR + 10;
-  }
 
   canvas.addEventListener('pointerdown', e => {
     if (pick.open) {
@@ -839,25 +690,8 @@
       e.preventDefault();
       return;
     }
-    if (gacha.open) {
-      const L = gachaLayout();
-      if (inRect(e.clientX, e.clientY, L.drawBtn)) pullGacha();
-      else if (inRect(e.clientX, e.clientY, L.closeBtn)) closeGacha();
-      e.preventDefault();
-      return;
-    }
     if (inRect(e.clientX, e.clientY, shopBtnRect())) {
       openShop();
-      e.preventDefault();
-      return;
-    }
-    if (inRect(e.clientX, e.clientY, gachaBtnRect())) {
-      openGacha();
-      e.preventDefault();
-      return;
-    }
-    if (onDashBtn(e.clientX, e.clientY)) {
-      tryDash();
       e.preventDefault();
       return;
     }
@@ -915,17 +749,7 @@
     const mag = Math.hypot(inp.x, inp.y);
     player.moving = mag > 0.05;
 
-    // 대쉬(회피): 미끄러지는 동안은 정해진 방향으로 빠르게 이동
-    dash.cd = Math.max(0, dash.cd - dt);
-    dash.inv = Math.max(0, dash.inv - dt);
-    if (dash.t > 0) {
-      const st = Math.min(dt, dash.t);
-      player.x += dash.dx * DASH.speed * st;
-      player.y += dash.dy * DASH.speed * st;
-      dash.t -= dt;
-      dash.ghostT -= dt;
-      if (dash.ghostT <= 0) { dash.ghostT = 0.03; dashGhosts.push({ x: player.x, y: player.y, t: 0 }); }
-    } else if (player.moving) {
+    if (player.moving) {
       player.x += inp.x * player.speed * dt;
       player.y += inp.y * player.speed * dt;
       player.dirX = inp.x / mag;
@@ -933,10 +757,6 @@
       player.walkTime += dt * (6 + 6 * mag);
     } else {
       player.walkTime = 0;
-    }
-    for (let i = dashGhosts.length - 1; i >= 0; i--) {
-      dashGhosts[i].t += dt;
-      if (dashGhosts[i].t > 0.25) dashGhosts.splice(i, 1);
     }
 
     // 맞았을 때 밀려남 / 무적 시간
@@ -1166,11 +986,8 @@
       s.x += s.vx * dt; s.y += s.vy * dt; s.life -= dt;
       let gone = s.life <= 0 || s.x < 0 || s.y < 0 || s.x > WORLD.w || s.y > WORLD.h;
       if (!gone && Math.hypot(s.x - player.x, s.y - player.y) < s.r + player.r) {
-        if (dash.inv > 0) showDodge();   // 대쉬 무적: 탄이 몸을 통과함
-        else {
-          hurtPlayer(s.dmg, s.x - s.vx, s.y - s.vy);
-          gone = true;
-        }
+        hurtPlayer(s.dmg, s.x - s.vx, s.y - s.vy);
+        gone = true;
       }
       if (gone) enemyShots.splice(i, 1);
     }
@@ -1311,14 +1128,6 @@
     ctx.ellipse(sx, sy + player.r * 0.7, player.r * 0.95, player.r * 0.45, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // 대쉬 무적 중: 몸 주위 하늘색 빛
-    if (dash.inv > 0) {
-      ctx.fillStyle = `rgba(140,225,255,${0.3 + 0.15 * Math.sin(performance.now() / 40)})`;
-      ctx.beginPath();
-      ctx.arc(sx, sy - bob, player.r + 8, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
     // 발 (걷는 모션)
     const step = player.moving ? Math.sin(player.walkTime) * 5 : 0;
     const px = -player.dirY, py = player.dirX; // 진행 방향의 수직
@@ -1414,16 +1223,6 @@
       ctx.fill();
     }
     ctx.globalAlpha = 1;
-  }
-
-  function drawDashGhosts() {
-    for (const g of dashGhosts) {
-      const k = g.t / 0.25;
-      ctx.fillStyle = `rgba(140,225,255,${0.4 * (1 - k)})`;
-      ctx.beginPath();
-      ctx.arc(g.x - cam.x, g.y - cam.y, player.r * (1 - 0.2 * k), 0, Math.PI * 2);
-      ctx.fill();
-    }
   }
 
   function drawBossTelegraphs() {
@@ -1887,223 +1686,6 @@
     ctx.fillText('닫기 (E)', W / 2, cb.y + cb.h / 2 + 1);
   }
 
-  function drawCapsule(x, y, r, color, rot) {
-    ctx.save();
-    ctx.translate(x, y); ctx.rotate(rot);
-    ctx.fillStyle = '#f4f6fa';
-    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI); ctx.fill();
-    ctx.fillStyle = 'rgb(' + color + ')';
-    ctx.beginPath(); ctx.arc(0, 0, r, Math.PI, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,0.45)'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.moveTo(-r, 0); ctx.lineTo(r, 0); ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    ctx.beginPath(); ctx.arc(-r * 0.35, -r * 0.45, r * 0.22, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
-  }
-  const DOME_CAPS = [[-36, 30], [-12, 38], [12, 38], [36, 30], [-46, 6], [-22, 10], [2, 14], [26, 10], [46, 6], [-12, -14], [14, -12]];
-  const CAP_COLORS = ['200,210,225', '110,190,255', '255,120,90', '255,210,80', '120,230,140', '200,170,255', '255,120,150'];
-
-  function drawGacha() {
-    if (!gacha.open) return;
-    const L = gachaLayout(), cx = L.cx, now = performance.now() / 1000;
-    const p = gacha.prize, rolling = gacha.state === 'roll', show = gacha.state === 'show' && p;
-    const legend = show && p.rar === 2;
-    ctx.fillStyle = legend ? 'rgba(10,6,0,0.76)' : 'rgba(0,0,0,0.7)';
-    ctx.fillRect(0, 0, W, H);
-    if (legend) {
-      // 전설: 돌아가는 금빛 줄기
-      const Lr = Math.max(W, H) * 1.2;
-      ctx.save();
-      ctx.translate(cx, L.domeY); ctx.rotate(now * 0.5);
-      ctx.fillStyle = 'rgba(255,200,60,0.10)';
-      for (let i = 0; i < 14; i++) {
-        ctx.rotate(Math.PI * 2 / 14);
-        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-Lr * 0.12, -Lr); ctx.lineTo(Lr * 0.12, -Lr); ctx.closePath(); ctx.fill();
-      }
-      ctx.restore();
-    }
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    // 제목
-    ctx.font = 'bold 24px system-ui, -apple-system, sans-serif';
-    ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-    ctx.strokeText('아이템 뽑기', cx, L.titleY);
-    ctx.fillStyle = '#d6b4ff';
-    ctx.fillText('아이템 뽑기', cx, L.titleY);
-    // 가진 코인
-    const line = '가진 코인 ' + shop.coins;
-    ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
-    const lw = ctx.measureText(line).width, lx = cx - (lw + 24) / 2;
-    drawCoinIcon(lx + 9, L.coinY - 1, 9);
-    ctx.textAlign = 'left'; ctx.fillStyle = '#ffffff';
-    ctx.fillText(line, lx + 24, L.coinY);
-    ctx.textAlign = 'center';
-    // 확률 안내
-    ctx.font = '12px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    const pct = n => Math.round(n * 100) + '%';
-    ctx.fillText('일반 ' + pct(1 - GACHA.rare - GACHA.legend) + ' · 희귀 ' + pct(GACHA.rare) + ' · 전설 ' + pct(GACHA.legend), cx, L.rateY);
-
-    // 뽑기 기계 — 유리 돔 + 캡슐
-    const mx = cx + (rolling ? Math.sin(now * 60) * 2 : 0);
-    ctx.fillStyle = 'rgba(190,225,255,0.16)';
-    ctx.beginPath(); ctx.arc(mx, L.domeY, L.domeR, 0, Math.PI * 2); ctx.fill();
-    const ca = Math.cos(gacha.spin), sa = Math.sin(gacha.spin);
-    DOME_CAPS.forEach(([x, y], i) => {
-      const j = rolling ? Math.sin(now * 40 + i * 2) * 2 : 0;
-      drawCapsule(mx + x * ca - y * sa + j, L.domeY + x * sa + y * ca - j, 13, CAP_COLORS[i % CAP_COLORS.length], gacha.spin * 2 + i);
-    });
-    ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(mx, L.domeY, L.domeR, 0, Math.PI * 2); ctx.stroke();
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 4; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.arc(mx, L.domeY, L.domeR - 12, Math.PI * 1.15, Math.PI * 1.45); ctx.stroke();
-    ctx.lineCap = 'butt';
-    // 몸통
-    const bx = mx - L.bodyW / 2, by = L.bodyY;
-    ctx.fillStyle = '#c0392b';
-    ctx.fillRect(bx, by, L.bodyW, L.bodyH);
-    ctx.fillStyle = '#e8574a';
-    ctx.fillRect(bx, by, L.bodyW, 12);
-    ctx.strokeStyle = '#4a0f0a'; ctx.lineWidth = 3;
-    ctx.strokeRect(bx, by, L.bodyW, L.bodyH);
-    ctx.font = 'bold 18px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText('뽑기', mx - 36, by + 42);
-    // 손잡이 (뽑을 때 돌아감)
-    const kx = mx + 44, ky = by + 42;
-    ctx.fillStyle = '#f4f6fa'; ctx.strokeStyle = '#4a0f0a'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(kx, ky, 18, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.save();
-    ctx.translate(kx, ky); ctx.rotate(gacha.knob);
-    ctx.fillStyle = '#8a929c';
-    ctx.fillRect(-15, -4, 30, 8);
-    ctx.restore();
-    // 나오는 구멍 + 나온 캡슐
-    ctx.fillStyle = '#2a0a06';
-    ctx.fillRect(mx - 28, by + L.bodyH - 34, 56, 26);
-    if (show) drawCapsule(mx, by + L.bodyH - 21, 11, RARITY[p.rar].color, 0);
-
-    // 결과 카드
-    const c = L.card;
-    ctx.fillStyle = 'rgba(30,34,40,0.94)';
-    ctx.fillRect(c.x, c.y, c.w, c.h);
-    if (show) {
-      const rc = RARITY[p.rar];
-      ctx.save();
-      if (p.rar > 0) { ctx.shadowColor = 'rgba(' + rc.color + ',0.9)'; ctx.shadowBlur = 10 + 6 * Math.sin(now * 6); }
-      ctx.strokeStyle = 'rgb(' + rc.color + ')'; ctx.lineWidth = p.rar === 2 ? 4 : 3;
-      ctx.strokeRect(c.x, c.y, c.w, c.h);
-      ctx.restore();
-      ctx.textAlign = 'left';
-      ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
-      ctx.fillStyle = 'rgb(' + rc.color + ')';
-      ctx.fillText(rc.stars + ' ' + rc.name, c.x + 14, c.y + 17);
-      ctx.textAlign = 'center';
-      ctx.fillStyle = 'rgb(' + p.color + ')';
-      fitText(p.title, c.w - 28, 22, true);
-      ctx.fillText(p.title, cx, c.y + 44);
-      ctx.fillStyle = 'rgba(255,255,255,0.85)';
-      fitText(p.desc, c.w - 28, 13, false);
-      ctx.fillText(p.desc, cx, c.y + 69);
-      if (p.bonus) {
-        ctx.fillStyle = '#ffd24a';
-        fitText(p.bonus, c.w - 28, 12, true);
-        ctx.fillText(p.bonus, cx, c.y + 88);
-      }
-      if (gacha.fx > 0) {
-        ctx.fillStyle = `rgba(255,255,255,${0.5 * gacha.fx})`;
-        ctx.fillRect(c.x, c.y, c.w, c.h);
-      }
-    } else {
-      ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 2;
-      ctx.strokeRect(c.x, c.y, c.w, c.h);
-      if (rolling) {
-        ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
-        ctx.fillStyle = 'rgba(255,255,255,0.55)';
-        ctx.fillText('두근두근…', cx, c.y + 20);
-        ctx.fillStyle = 'rgba(255,255,255,0.9)';
-        fitText(gacha.name, c.w - 28, 22, true);
-        ctx.fillText(gacha.name, cx, c.y + 54);
-      } else {
-        ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
-        ctx.fillStyle = 'rgba(255,255,255,0.9)';
-        ctx.fillText('코인 ' + GACHA.cost + '개로 한 번 뽑아요', cx, c.y + 38);
-        ctx.font = '13px system-ui, -apple-system, sans-serif';
-        ctx.fillStyle = 'rgba(255,255,255,0.6)';
-        ctx.fillText('공격력 아이템 · 능력 · 무기 · 잭팟 능력', cx, c.y + 64);
-      }
-    }
-    // 전설이면 크게 표시
-    if (legend) {
-      const pulse = 1 + 0.08 * Math.sin(now * 8) + gacha.fx * 0.5;
-      ctx.save();
-      ctx.translate(cx, L.domeY); ctx.scale(pulse, pulse);
-      ctx.font = 'bold 34px system-ui, -apple-system, sans-serif';
-      ctx.lineWidth = 7; ctx.strokeStyle = 'rgba(80,40,0,0.9)';
-      ctx.strokeText('★ 전설! ★', 0, 0);
-      ctx.shadowColor = 'rgba(255,200,60,0.9)'; ctx.shadowBlur = 18;
-      ctx.fillStyle = '#ffd24a';
-      ctx.fillText('★ 전설! ★', 0, 0);
-      ctx.restore();
-    }
-    // 안내 / 메시지
-    if (gacha.msgT > 0) {
-      ctx.globalAlpha = Math.min(1, gacha.msgT / 0.3);
-      ctx.font = 'bold 15px system-ui, -apple-system, sans-serif';
-      ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-      ctx.strokeText(gacha.msg, cx, L.msgY);
-      ctx.fillStyle = 'rgb(' + gacha.msgColor + ')';
-      ctx.fillText(gacha.msg, cx, L.msgY);
-      ctx.globalAlpha = 1;
-    } else {
-      ctx.font = '12px system-ui, -apple-system, sans-serif';
-      ctx.fillStyle = 'rgba(255,255,255,0.55)';
-      ctx.fillText('키보드: Space 뽑기 · G 닫기', cx, L.msgY);
-    }
-    // 뽑기 버튼
-    const db = L.drawBtn, afford = shop.coins >= GACHA.cost;
-    const dbx = db.x + Math.sin(gacha.shake * 40) * 6 * gacha.shake;
-    ctx.fillStyle = rolling ? 'rgba(90,80,110,0.8)' : afford ? 'rgba(160,100,245,0.95)' : 'rgba(95,80,120,0.8)';
-    ctx.fillRect(dbx, db.y, db.w, db.h);
-    ctx.strokeStyle = 'rgba(255,255,255,0.75)'; ctx.lineWidth = 2;
-    ctx.strokeRect(dbx, db.y, db.w, db.h);
-    ctx.font = 'bold 19px system-ui, -apple-system, sans-serif';
-    if (rolling) {
-      ctx.fillStyle = 'rgba(255,255,255,0.7)';
-      ctx.fillText('뽑는 중…', dbx + db.w / 2, db.y + db.h / 2 + 1);
-    } else {
-      const label = show ? '한 번 더 뽑기' : '뽑기', cost = String(GACHA.cost);
-      const tw = ctx.measureText(label).width;
-      ctx.font = 'bold 17px system-ui, -apple-system, sans-serif';
-      const cw2 = ctx.measureText(cost).width;
-      const total = tw + 14 + 18 + 4 + cw2, sx = dbx + db.w / 2 - total / 2;
-      ctx.textAlign = 'left';
-      ctx.font = 'bold 19px system-ui, -apple-system, sans-serif';
-      ctx.fillStyle = afford ? '#ffffff' : 'rgba(255,255,255,0.7)';
-      ctx.fillText(label, sx, db.y + db.h / 2 + 1);
-      drawCoinIcon(sx + tw + 14 + 9, db.y + db.h / 2, 9);
-      ctx.font = 'bold 17px system-ui, -apple-system, sans-serif';
-      ctx.fillStyle = afford ? '#ffe9a0' : '#ff8a7a';
-      ctx.fillText(cost, sx + tw + 14 + 18 + 4, db.y + db.h / 2 + 1);
-      ctx.textAlign = 'center';
-    }
-    // 닫기 버튼
-    const cb = L.closeBtn;
-    ctx.globalAlpha = rolling ? 0.4 : 1;
-    ctx.fillStyle = 'rgba(255,255,255,0.12)';
-    ctx.fillRect(cb.x, cb.y, cb.w, cb.h);
-    ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 2;
-    ctx.strokeRect(cb.x, cb.y, cb.w, cb.h);
-    ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText('닫기 (G)', cx, cb.y + cb.h / 2 + 1);
-    ctx.globalAlpha = 1;
-    // 전설이 나온 순간 번쩍
-    if (legend && gacha.fx > 0.6) {
-      ctx.fillStyle = `rgba(255,236,170,${(gacha.fx - 0.6) / 0.4 * 0.7})`;
-      ctx.fillRect(0, 0, W, H);
-    }
-  }
-
   function drawTrans() {
     if (!trans.active) return;
     const a = trans.t < TRANS_HALF ? trans.t / TRANS_HALF : Math.max(0, 1 - (trans.t - TRANS_HALF) / (TRANS_HALF * 1.2));
@@ -2199,19 +1781,6 @@
     ctx.font = 'bold 15px system-ui, -apple-system, sans-serif';
     ctx.fillStyle = ready ? '#3a2400' : 'rgba(255,255,255,0.85)';
     ctx.fillText('강화 (E)', sb.x + sb.w / 2, sb.y + sb.h / 2 + 1);
-    // 뽑기 버튼
-    const gb = gachaBtnRect(), gReady = shop.coins >= GACHA.cost;
-    if (gReady) {
-      ctx.fillStyle = `rgba(190,130,255,${0.25 + 0.2 * Math.sin(performance.now() / 180 + 1.5)})`;
-      ctx.fillRect(gb.x - 4, gb.y - 4, gb.w + 8, gb.h + 8);
-    }
-    ctx.fillStyle = gReady ? 'rgba(160,100,245,0.92)' : 'rgba(85,70,115,0.7)';
-    ctx.fillRect(gb.x, gb.y, gb.w, gb.h);
-    ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 2;
-    ctx.strokeRect(gb.x, gb.y, gb.w, gb.h);
-    ctx.font = 'bold 15px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = gReady ? '#ffffff' : 'rgba(255,255,255,0.85)';
-    ctx.fillText('뽑기 (G)', gb.x + gb.w / 2, gb.y + gb.h / 2 + 1);
     // 스테이지 (왼쪽, 무기 아래)
     const th = stageTheme(), stx = '스테이지 ' + stage.n + ' · ' + th.name;
     ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
@@ -2270,45 +1839,6 @@
     ctx.stroke();
   }
 
-  function drawDashBtn() {
-    if (pick.open || shop.open || gacha.open) return;   // 메뉴가 열려 있으면 숨김 (그동안은 쓸 수 없음)
-    const p = dashBtnPos(), r = DASH.btnR;
-    const ready = dash.cd <= 0;
-    ctx.fillStyle = dash.t > 0 ? 'rgba(140,225,255,0.6)' : ready ? 'rgba(80,190,255,0.32)' : 'rgba(60,70,85,0.45)';
-    ctx.strokeStyle = ready ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.3)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    // 다시 쓸 수 있을 때까지 남은 시간
-    if (!ready) {
-      ctx.fillStyle = 'rgba(0,0,0,0.35)';
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.arc(p.x, p.y, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (dash.cd / DASH.cooldown));
-      ctx.closePath();
-      ctx.fill();
-    }
-    // » 모양
-    ctx.strokeStyle = ready ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.5)';
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.beginPath();
-    for (const ox of [-7, 3]) {
-      ctx.moveTo(p.x + ox - 3, p.y - 14); ctx.lineTo(p.x + ox + 4, p.y - 7); ctx.lineTo(p.x + ox - 3, p.y);
-    }
-    ctx.stroke();
-    ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = 'bold 12px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = ready ? '#ffffff' : 'rgba(255,255,255,0.6)';
-    ctx.fillText('대쉬', p.x, p.y + 12);
-    ctx.font = '10px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
-    ctx.fillText('Shift / K', p.x, p.y + r + 10);
-  }
-
   function drawStick() {
     if (!stick.active) return;
     let dx = stick.x - stick.ox;
@@ -2342,17 +1872,14 @@
     drawEnemyShots();
     drawBolts();
     drawBlades();
-    drawDashGhosts();
     drawPlayer();
     drawFloats();
     drawBanner();
     drawStick();
     drawFireBtn();
-    drawDashBtn();
     drawHud();
     drawPick();
     drawShop();
-    drawGacha();
     drawTrans();
   }
 
@@ -2466,7 +1993,6 @@
     if (trans.active) updateTrans(dt);
     else if (pick.open) pick.openT += dt;
     else if (shop.open) updateShopUi(dt);
-    else if (gacha.open) updateGachaUi(dt);
     else update(dt);
     render();
     requestAnimationFrame(loop);
