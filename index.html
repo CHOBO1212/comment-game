@@ -538,6 +538,88 @@
     }
   }
 
+  // ===== 강아지 친구 '코코' — 졸졸 따라다니다가 근처에 떨어진 코인을 물어 옴 =====
+  const PET = {
+    r: 12,
+    follow: 46,       // 캐릭터와 이 거리쯤 떨어져서 따라옴
+    speed: 300,       // 따라갈 때 최고 속도 (캐릭터가 빨라지면 같이 빨라짐)
+    fetchSpeed: 400,  // 코인 주우러 뛰어갈 때 속도
+    sniff: 260,       // 코코 주변 이 거리 안의 코인을 찾아감
+    leash: 380,       // 캐릭터에게서 이보다 먼 코인은 안 감
+    warp: 700,        // 이보다 멀어지면 캐릭터 곁으로 뿅 하고 나타남
+    sayDur: 4         // 처음 인사 말풍선 시간
+  };
+  const pet = {
+    x: SPAWN.x - 46, y: SPAWN.y + 24, r: PET.r,
+    dirX: 1, dirY: 0, moving: false, walk: 0, wag: 0,
+    target: null, happy: 0,
+    say: '코인은 내가 물어 올게!', sayT: PET.sayDur
+  };
+  banner.text = '새 친구 · 강아지 코코'; banner.t = 3.5; banner.color = '255,214,150';
+  function updatePet(dt) {
+    pet.happy = Math.max(0, pet.happy - dt);
+    pet.sayT = Math.max(0, pet.sayT - dt);
+    // 너무 멀어지면 (쓰러져서 처음 자리로 갔거나 다음 스테이지) 곁으로 뿅
+    if (Math.hypot(player.x - pet.x, player.y - pet.y) > PET.warp) {
+      pet.x = player.x - player.dirX * PET.follow;
+      pet.y = player.y - player.dirY * PET.follow;
+      pet.target = null;
+      poofs.push({ x: pet.x, y: pet.y, t: 0 });
+    }
+    // 물어 올 코인 고르기 (바닥에 내려앉은 코인 중 가장 가까운 것)
+    const t = pet.target;
+    if (t && (!coins.includes(t) || Math.hypot(t.x - player.x, t.y - player.y) > PET.leash + 60)) pet.target = null;
+    if (!pet.target) {
+      let bd = PET.sniff;
+      for (const c of coins) {
+        if (c.t < 0.3 || Math.hypot(c.x - player.x, c.y - player.y) > PET.leash) continue;
+        const d = Math.hypot(c.x - pet.x, c.y - pet.y);
+        if (d < bd) { bd = d; pet.target = c; }
+      }
+    }
+    // 움직이기: 코인이 있으면 그쪽으로, 없으면 캐릭터를 따라감
+    let vx = 0, vy = 0;
+    if (pet.target) {
+      const c = pet.target, dx = c.x - pet.x, dy = c.y - pet.y, d = Math.hypot(dx, dy) || 1;
+      const mv = Math.min(d, Math.max(PET.fetchSpeed, player.speed * 1.3) * dt);
+      vx = dx / d * mv; vy = dy / d * mv;
+    } else {
+      const dx = player.x - pet.x, dy = player.y - pet.y, d = Math.hypot(dx, dy) || 1;
+      if (d > PET.follow) {
+        const sp = Math.min(Math.max(PET.speed, player.speed * 1.25), (d - PET.follow) * 6);
+        const mv = Math.min(d - PET.follow, sp * dt);
+        vx = dx / d * mv; vy = dy / d * mv;
+      } else if (d < player.r + PET.r + 6) {
+        const mv = 40 * dt;   // 너무 붙으면 살짝 비켜섬
+        vx = -dx / d * mv; vy = -dy / d * mv;
+      }
+    }
+    pet.x = Math.max(PET.r, Math.min(WORLD.w - PET.r, pet.x + vx));
+    pet.y = Math.max(PET.r, Math.min(WORLD.h - PET.r, pet.y + vy));
+    const step = Math.hypot(vx, vy);
+    pet.moving = dt > 0 && step / dt > 20;
+    if (pet.moving) {
+      pet.dirX = vx / step; pet.dirY = vy / step;
+      pet.walk += dt * 16;
+    } else {
+      // 멈추면 캐릭터 쪽을 바라봄
+      const dx = player.x - pet.x, dy = player.y - pet.y, d = Math.hypot(dx, dy);
+      if (d > 1) { pet.dirX = dx / d; pet.dirY = dy / d; }
+      pet.walk = 0;
+    }
+    pet.wag += dt * (pet.happy > 0 ? 22 : pet.moving ? 14 : 7);
+    // 코인 물기 → 바로 내 코인으로
+    const c = pet.target;
+    if (c && Math.hypot(c.x - pet.x, c.y - pet.y) < PET.r + COIN.r + 2) {
+      coins.splice(coins.indexOf(c), 1);
+      shop.coins += c.v;
+      shop.coinFx = 1;
+      pet.target = null;
+      pet.happy = 0.45;
+      floats.push({ x: pet.x, y: pet.y - PET.r - 10, t: 0, text: '+' + c.v, color: '255,214,90' });
+    }
+  }
+
   // ===== 아이템 뽑기 (코인을 내고 무작위 아이템 하나) =====
   const GACHA = {
     cost: 10,      // 한 번 뽑는 데 드는 코인
@@ -1221,6 +1303,8 @@
         shop.coinFx = 1;
       }
     }
+    // 강아지 코코
+    updatePet(dt);
     shop.coinFx = Math.max(0, shop.coinFx - dt * 3);
     // 포탈에 들어가면 다음 스테이지
     if (portal) {
@@ -1493,6 +1577,11 @@
       const sx = player.x - cam.x, sy = player.y - cam.y;
       shadowAt(sx + player.r * 0.15, sy + player.r * 0.7, player.r * 0.95, player.r * 0.45, 0.24);
     }
+    {
+      // 강아지 코코 (폴짝 뛰면 그림자가 작아짐)
+      const sx = pet.x - cam.x, sy = pet.y - cam.y, k = pet.happy > 0 ? 0.8 : 1;
+      shadowAt(sx + PET.r * 0.15, sy + PET.r * 0.7, PET.r * 0.95 * k, PET.r * 0.45 * k, 0.22);
+    }
     // 공중에 떠 있는 것 (총알 · 보스 탄 · 회전 칼날) — 바닥에 옅은 그림자
     if (bullets.length) {
       const lw = 4 + Math.min(power.level, 8);
@@ -1540,11 +1629,88 @@
       actors.push(m);
     }
     actors.push(player);
+    actors.push(pet);
     actors.sort((a, b) => (a.y + a.r) - (b.y + b.r));
     for (const a of actors) {
       if (a === player) drawPlayer();
+      else if (a === pet) drawPet();
       else drawMonsterBody(a);
     }
+  }
+
+  // 강아지 코코 — 크림색 몸, 뒤로 누운 갈색 귀, 살랑거리는 꼬리
+  function drawPet() {
+    const sx = pet.x - cam.x, sy = pet.y - cam.y, R = PET.r;
+    if (sx < -60 || sy < -60 || sx > W + 60 || sy > H + 60) return;
+    const hop = pet.moving ? Math.abs(Math.sin(pet.walk)) * 3 : 0;
+    const jump = pet.happy > 0 ? Math.sin(pet.happy / 0.45 * Math.PI) * 7 : 0;
+    const by = sy - hop - jump;
+    const fx = pet.dirX, fy = pet.dirY, px = -fy, py = fx, k = R / 10;   // k: 크기 배율
+    const tail = () => {
+      const ta = Math.atan2(-fy, -fx) + Math.sin(pet.wag) * 0.6;
+      const x0 = sx - fx * R * 0.7, y0 = by - fy * R * 0.7;
+      ctx.strokeStyle = '#a8743f'; ctx.lineWidth = 4 * k; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.quadraticCurveTo(x0 + Math.cos(ta) * 6 * k, y0 + (Math.sin(ta) * 6 - 4) * k, x0 + Math.cos(ta) * 11 * k, y0 + (Math.sin(ta) * 11 - 5) * k);
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+    };
+    const tailBehind = fy > -0.2;   // 화면 아래를 보면 꼬리가 몸 뒤(위쪽)에 가려짐
+    if (tailBehind) tail();
+    // 발 (총총)
+    const step = pet.moving ? Math.sin(pet.walk) * 3 * k : 0;
+    for (const side of [-1, 1]) {
+      drawBall(sx + px * side * 5 * k + fx * step * side, sy + py * side * 5 * k + fy * step * side + 3 * k, 3 * k, '#8a6440');
+    }
+    // 몸
+    drawBall(sx, by, R, '#f3e2c0', 'rgba(120,84,40,0.85)', 1.2);
+    if (!tailBehind) tail();
+    // 귀
+    const fa = Math.atan2(fy, fx);
+    ctx.fillStyle = '#a8743f'; ctx.strokeStyle = 'rgba(90,55,20,0.9)'; ctx.lineWidth = 1;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.ellipse(sx + px * side * R * 0.72 - fx, by + py * side * R * 0.72 - fy - 1, 5.5 * k, 3.4 * k, fa + side * 0.35, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+    }
+    // 눈 + 코
+    const ex = sx + fx * 5 * k, ey = by + fy * 5 * k;
+    for (const side of [-1, 1]) {
+      const cx = ex + px * side * 3.6 * k, cy = ey + py * side * 3.6 * k;
+      ctx.fillStyle = '#2a1d14';
+      ctx.beginPath(); ctx.arc(cx, cy, 1.9 * k, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.beginPath(); ctx.arc(cx - 0.6 * k, cy - 0.6 * k, 0.7 * k, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = '#3a2a20';
+    ctx.beginPath(); ctx.arc(sx + fx * R * 0.88, by + fy * R * 0.88, 2.3 * k, 0, Math.PI * 2); ctx.fill();
+  }
+  // 코코 이름표 + 처음 인사 말풍선 (몬스터에 가려지지 않게 따로 그림)
+  function drawPetTag() {
+    const sx = pet.x - cam.x, ty = pet.y - cam.y - PET.r - 14;
+    if (sx < -120 || ty < -80 || sx > W + 120 || ty > H + 80) return;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.strokeText('코코', sx, ty);
+    ctx.fillStyle = 'rgba(255,230,190,0.95)';
+    ctx.fillText('코코', sx, ty);
+    if (pet.sayT <= 0) return;
+    ctx.globalAlpha = Math.min(1, pet.sayT / 0.5, (PET.sayDur - pet.sayT) / 0.2);
+    ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
+    const bw = ctx.measureText(pet.say).width + 18, bh = 24, bx = sx - bw / 2, bt = ty - 12 - bh;
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(bx + 2, bt + 3, bw, bh);
+    ctx.fillStyle = '#fffaf0';
+    ctx.fillRect(bx, bt, bw, bh);
+    ctx.strokeStyle = 'rgba(120,84,40,0.9)'; ctx.lineWidth = 1.5;
+    ctx.strokeRect(bx, bt, bw, bh);
+    ctx.beginPath(); ctx.moveTo(sx - 6, bt + bh - 1); ctx.lineTo(sx, bt + bh + 7); ctx.lineTo(sx + 6, bt + bh - 1); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(sx - 6, bt + bh); ctx.lineTo(sx, bt + bh + 7); ctx.lineTo(sx + 6, bt + bh); ctx.stroke();
+    ctx.fillStyle = '#4a3418';
+    ctx.fillText(pet.say, sx, bt + bh / 2 + 1);
+    ctx.globalAlpha = 1;
   }
 
   function drawPlayer() {
@@ -2720,6 +2886,7 @@
     drawActors();      // 몬스터 + 캐릭터 (아래쪽에 있는 것이 앞에)
     drawPoofs();
     drawMonsterBars();
+    drawPetTag();
     drawBullets();
     drawEnemyShots();
     drawBolts();
